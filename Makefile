@@ -76,7 +76,8 @@ $(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml
 	@echo "══════════════════════════════════════════════════════════════"
 	@mkdir -p $(MW_BUILD_DIR) $(BUILD_DIR)/cargo-cache
 	$(CONTAINER) run --rm \
-		$(USER_ARGS) \
+		-e HOST_UID=$(shell id -u) \
+		-e HOST_GID=$(shell id -g) \
 		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
 		-v $(MW_BUILD_DIR):/workdir/output \
 		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
@@ -88,7 +89,8 @@ $(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml
 			apt-get update -qq && \
 			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev >/dev/null 2>&1 && \
 			cargo build --release 2>&1 && \
-			cp target/release/fancypants /workdir/output/fancypants \
+			cp target/release/fancypants /workdir/output/fancypants && \
+			chown $$HOST_UID:$$HOST_GID /workdir/output/fancypants \
 		'
 	@echo ""
 	@echo "✓ Middleware built: $(MW_BUILD_DIR)/fancypants"
