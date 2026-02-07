@@ -1,0 +1,37 @@
+[package]
+name = "fancypants"
+version = "0.1.0"
+edition = "2021"
+description = "BLE rangefinder to Buttplug.io middleware"
+license = "MIT"
+
+[dependencies]
+# BLE
+btleplug = "0.11"
+
+# Buttplug
+buttplug = "9"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+
+# Configuration
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Signal handling
+ctrlc = "3"
+
+# Error handling
+anyhow = "1"
+
+# UUID (used by btleplug characteristic matching)
+uuid = "1"

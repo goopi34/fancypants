@@ -1,0 +1,45 @@
+# Fancypants Configuration
+# =====================================
+
+[ble]
+# Must match CONFIG_BT_DEVICE_NAME in firmware prj.conf
+device_name = "Fancypants"
+# How long to scan before giving up (seconds)
+scan_timeout_secs = 30
+# Delay before reconnecting after disconnect (seconds)
+reconnect_delay_secs = 5
+
+[mapping]
+# true = closer to sensor means more intense (default, most intuitive)
+# false = further from sensor means more intense
+invert = true
+
+# Sensor range window (millimeters)
+# VL53L0X effective range is ~30-1200mm
+# These define the "active zone" for intensity mapping
+min_range_mm = 30
+max_range_mm = 300
+
+# Output intensity range (0.0 - 1.0)
+min_intensity = 0.0
+max_intensity = 1.0
+
+# Distances beyond this produce zero intensity (0 = disabled)
+# Useful to create an "off" zone when you pull away
+deadzone_mm = 500
+
+# Exponential moving average smoothing factor
+# 0.0 = no smoothing (raw sensor data), 1.0 = maximum smoothing
+# 0.2-0.4 feels responsive but eliminates jitter
+smoothing = 0.3
+
+[buttplug]
+# Intiface Engine websocket address
+# Default port for Intiface Central / Intiface Engine
+server_address = "ws://127.0.0.1:12345"
+
+# Device index to control (comment out to use first available)
+# device_index = 0
+
+# Actuator types to target
+actuator_types = ["Vibrate"]

@@ -1,0 +1,4 @@
+build/
+.git/
+*.uf2
+target/

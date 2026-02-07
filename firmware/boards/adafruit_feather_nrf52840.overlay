@@ -1,0 +1,34 @@
+/*
+ * Devicetree overlay for Adafruit Feather nRF52840 Express
+ *
+ * Adds VL53L0X ToF sensor on I2C0 (SDA=P0.12, SCL=P0.11)
+ * These are the default I2C pins on the Feather.
+ *
+ * The Adafruit VL53L0X breakout includes 10K pullups on SDA/SCL
+ * and a voltage regulator, so it works directly from the Feather 3V pin.
+ *
+ * Wiring:
+ *   Feather 3V  -> VL53L0X VIN
+ *   Feather GND -> VL53L0X GND
+ *   Feather SDA -> VL53L0X SDA
+ *   Feather SCL -> VL53L0X SCL
+ *
+ * If using STEMMA QT / Qwiic cable: just plug it in.
+ */
+
+&i2c0 {
+	status = "okay";
+
+	vl53l0x: vl53l0x@29 {
+		compatible = "st,vl53l0x";
+		reg = <0x29>;
+		status = "okay";
+	};
+};
+
+/* Enable ADC for battery voltage reading on P0.29 (VBAT/2 divider) */
+/ {
+	zephyr,user {
+		io-channels = <&adc 5>;
+	};
+};

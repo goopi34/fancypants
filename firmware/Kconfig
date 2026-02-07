@@ -1,0 +1,24 @@
+# Rangefinder BLE Configuration
+
+config RANGE_SAMPLE_INTERVAL_MS
+	int "Range sensor sampling interval in milliseconds"
+	default 50
+	help
+	  How often to read from the VL53L0X sensor.
+	  50ms = 20Hz update rate. Lower values increase responsiveness
+	  but consume more power.
+
+config RANGE_NOTIFY_INTERVAL_MS
+	int "BLE notification interval in milliseconds"
+	default 50
+	help
+	  How often to send BLE notifications to the central.
+	  Should be >= RANGE_SAMPLE_INTERVAL_MS.
+
+config BATTERY_SAMPLE_INTERVAL_S
+	int "Battery level sampling interval in seconds"
+	default 60
+	help
+	  How often to read the battery ADC.
+
+source "Kconfig.zephyr"
