@@ -47,7 +47,7 @@ module front_enclosure_bottom() {
     enclosure_h = sensor_pcb_h + 2 * (clearance + wall);
     enclosure_d = sensor_total_height + clearance + wall;
     
-    // Belt tab parameters - flat tabs on long edges
+    // Belt tab parameters - flat tabs on short edges
     belt_slot_w = belt_width + 2 * loop_clearance;
     belt_slot_h = belt_thickness + 2 * loop_clearance;
     tab_wall = 3;
@@ -60,17 +60,17 @@ module front_enclosure_bottom() {
             translate([0, 0, enclosure_d/2])
                 cube([enclosure_w, enclosure_h, enclosure_d], center=true);
             
-            // Belt tabs on long edges (extend outward along Y, coplanar with bottom)
-            for(y = [-1, 1]) {
-                translate([0, y * (enclosure_h/2 + tab_length/2), wall/2])
-                    cube([tab_width, tab_length, wall], center=true);
+            // Belt tabs on short edges (extend outward along X, coplanar with bottom)
+            for(x = [-1, 1]) {
+                translate([x * (enclosure_w/2 + tab_length/2), 0, wall/2])
+                    cube([tab_length, tab_width, wall], center=true);
             }
         }
         
         // Belt slots through tabs
-        for(y = [-1, 1]) {
-            translate([0, y * (enclosure_h/2 + tab_length/2), wall/2])
-                cube([belt_slot_w, belt_slot_h, wall + 1], center=true);
+        for(x = [-1, 1]) {
+            translate([x * (enclosure_w/2 + tab_length/2), 0, wall/2])
+                cube([belt_slot_h, belt_slot_w, wall + 1], center=true);
         }
         
         // Interior cavity for PCB
@@ -81,13 +81,13 @@ module front_enclosure_bottom() {
         translate([0, 0, enclosure_d - 0.5])
             cube([lens_w + 1, lens_h + 1, wall + 1], center=true);
         
-        // JST cable exit (BOTTOM EDGE - along belt direction)
-        translate([0, -(enclosure_h/2 - wall/2), wall + clearance + jst_housing_h/2])
-            cube([jst_housing_w + 2, wall + 1, jst_housing_h + 2], center=true);
+        // JST cable exit (SHORT EDGE, centered)
+        translate([-(enclosure_w/2 - wall/2), 0, wall + clearance + jst_housing_h/2])
+            cube([wall + 1, jst_housing_w + 2, jst_housing_h + 2], center=true);
         
         // JST cable channel (thinner cable portion)
-        translate([0, -(enclosure_h/2 - wall/2), wall + clearance + jst_cable_h/2])
-            cube([jst_cable_w + 1, wall + 1, jst_cable_h + 1], center=true);
+        translate([-(enclosure_w/2 - wall/2), 0, wall + clearance + jst_cable_h/2])
+            cube([wall + 1, jst_cable_w + 1, jst_cable_h + 1], center=true);
         
         // Mounting screw holes through bottom
         for(x = [-1, 1]) {
@@ -138,10 +138,6 @@ module front_enclosure_top() {
     enclosure_h = sensor_pcb_h + 2 * (clearance + wall);
     lid_thickness = 2;
     
-    // Lens opening
-    lens_w = 4;
-    lens_h = 5;
-    
     difference() {
         union() {
             // Top lid
@@ -157,9 +153,9 @@ module front_enclosure_top() {
                 }
         }
         
-        // Lens opening (centered)
-        translate([0, 0, -0.5])
-            cube([lens_w + 1, lens_h + 1, lid_thickness + 1], center=true);
+        // Sensor window (centered, 5mm along length x 6mm across, through lid + lip)
+        translate([0, 0, 0])
+            cube([5, 6, 20], center=true);
         
         // Snap holes for posts - EXTENDED to go fully through lid and lip
         for(x = [-1, 1]) {
