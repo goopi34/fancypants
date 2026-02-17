@@ -209,13 +209,14 @@ module front_enclosure_bottom() {
         
         // Holes cut through everything (including reinforcement pads)
         
-        // Mounting screw holes through bottom (full penetration into cavity)
+        // Mounting screw holes through bottom (ribbed for wood screws)
         for(x = [-1, 1]) {
             for(y = [-1, 1]) {
                 translate([x * (sensor_pcb_w/2 - hole_offset), 
                           y * (sensor_pcb_h/2 - hole_offset), 
                           -0.5])
-                    cylinder(d=2.5, h=enclosure_d + 1);
+                    ribbed_boss_hole(boss_hole, boss_rib_id, boss_rib_width, 
+                                    boss_rib_count, enclosure_d + 1);
             }
         }
         
@@ -385,13 +386,14 @@ module hip_enclosure_bottom() {
             rotate([90, 0, 0])
                 cylinder(d=2, h=1);
         
-        // Mounting screw access for Feather
+        // Mounting screw holes for Feather (ribbed for wood screws)
         for(x = [-1, 1]) {
             for(y = [-1, 1]) {
                 translate([x * (feather_w/2 - hole_offset), 
                           feather_y_center + y * (feather_h/2 - hole_offset), 
                           -0.5])
-                    cylinder(d=2.5, h=wall + 1);
+                    ribbed_boss_hole(boss_hole, boss_rib_id, boss_rib_width, 
+                                    boss_rib_count, wall + 2);
             }
         }
         
