@@ -15,10 +15,15 @@ belt_width = 43;        // Belt width
 belt_thickness = 7;     // Belt thickness at head
 loop_clearance = 1;     // Extra clearance for belt in slots
 
-// Screw boss parameters (M2.5 self-tapping)
-boss_od = 6;            // Outer diameter of screw boss
-boss_id = 2.0;          // Pilot hole for M2.5 self-tap
-boss_clearance = 2.8;   // Clearance hole in lid for M2.5 screw
+// Screw boss parameters (3mm wood screws)
+boss_od = 8;            // Outer diameter of screw boss (larger for ribbed interior)
+boss_hole = 3.4;        // Oversized hole in boss (screw doesn't engage wall)
+boss_rib_id = 2.6;      // Inner diameter at rib tips (screw bites into ribs)
+boss_rib_count = 4;     // Number of grip ribs
+boss_rib_width = 1.2;   // Angular width of each rib (mm at hole wall)
+boss_clearance = 3.4;   // Clearance hole in lid for screw shaft
+boss_counterbore_d = 6; // Counterbore diameter for screw head
+boss_counterbore_depth = 2; // Counterbore depth in lid top
 
 // Rounding
 edge_r = 2;             // Fillet/round radius for edges and corners
@@ -26,6 +31,7 @@ edge_r = 2;             // Fillet/round radius for edges and corners
 // Belt tab parameters
 tab_thickness = 5;      // Tab slab thickness
 tab_wall = 5;           // Material bridge width flanking belt slot
+tab_r = 1;              // Tab bottom edge rounding radius (kept small for printability)
 
 // ============================================================================
 // UTILITY MODULES
@@ -36,17 +42,21 @@ module rounded_rect_2d(w, h, r) {
     offset(r) offset(-r) square([w, h], center=true);
 }
 
-// Box with all edges rounded (for lids - top face is curved)
+// Box with rounded top edges only, perfectly flat bottom (for lids)
 module rounded_box(w, h, d, r) {
+    actual_r = min(r, d * 0.45);  // Clamp so it works for thin lids
     hull() {
-        for(x = [-1, 1]) {
-            for(y = [-1, 1]) {
-                translate([x * (w/2 - r), y * (h/2 - r), 0])
-                    cylinder(r=r, h=d - r);
-                translate([x * (w/2 - r), y * (h/2 - r), d - r])
-                    sphere(r=r);
-            }
-        }
+        // Bottom: full-size rounded-corner rectangle, thin slab
+        linear_extrude(height=0.01)
+            rounded_rect_2d(w, h, actual_r);
+        // Just below the top rounding: full-size
+        translate([0, 0, d - actual_r])
+            linear_extrude(height=0.01)
+                rounded_rect_2d(w, h, actual_r);
+        // Top: inset by actual_r on all sides, at full height
+        translate([0, 0, d - 0.01])
+            linear_extrude(height=0.01)
+                rounded_rect_2d(w - 2*actual_r, h - 2*actual_r, 0.01);
     }
 }
 
@@ -54,6 +64,25 @@ module rounded_box(w, h, d, r) {
 module rounded_box_flat_top(w, h, d, r) {
     linear_extrude(height=d)
         rounded_rect_2d(w, h, r);
+}
+
+// Ribbed screw boss hole - oversized bore with inward ribs for thread grip
+// Use in difference() to cut into a solid boss cylinder.
+// Creates a hole_d bore with rib_count ribs protruding inward to rib_id.
+module ribbed_boss_hole(hole_d, rib_id, rib_width, rib_count, h) {
+    difference() {
+        // Main oversized bore
+        cylinder(d=hole_d, h=h);
+        // Leave behind the ribs by subtracting the bore minus rib volumes
+        // i.e., don't cut where the ribs are
+        for(i = [0 : rib_count - 1]) {
+            rotate([0, 0, i * (360 / rib_count)])
+                translate([0, 0, -0.5])
+                    linear_extrude(height=h + 1)
+                        translate([rib_id/2, -rib_width/2])
+                            square([(hole_d - rib_id)/2 + 0.1, rib_width]);
+        }
+    }
 }
 
 // Belt tab: rectangular body with ALL bottom edges and outer corners rounded
@@ -140,7 +169,7 @@ module front_enclosure_bottom() {
                 translate([x * (enclosure_w/2), 0, 0])
                     rotate([0, 0, x > 0 ? -90 : 90])
                         belt_tab(tab_total_w, tab_total_l, tab_thickness,
-                                belt_slot_w, belt_slot_h, edge_r);
+                                belt_slot_w, belt_slot_h, tab_r);
             }
             
             // Screw bosses in corners (full height)
@@ -152,10 +181,19 @@ module front_enclosure_bottom() {
             }
         }
         
-        // Interior cavity for PCB
-        translate([0, 0, wall + clearance + sensor_total_height/2])
-            cube([sensor_pcb_w + 2*clearance, sensor_pcb_h + 2*clearance, 
-                  sensor_total_height + 0.1], center=true);
+        // Interior cavity for PCB (with boss zones excluded)
+        difference() {
+            translate([0, 0, wall + clearance + sensor_total_height/2])
+                cube([sensor_pcb_w + 2*clearance, sensor_pcb_h + 2*clearance, 
+                      sensor_total_height + 0.1], center=true);
+            // Exclude boss zones from cavity cut
+            for(x = [-1, 1]) {
+                for(y = [-1, 1]) {
+                    translate([x * boss_x, y * boss_y, -0.5])
+                        cylinder(d=boss_od + 1, h=enclosure_d + 2);
+                }
+            }
+        }
         
         // Lens opening (centered on top face)
         translate([0, 0, enclosure_d - wall/2])
@@ -169,21 +207,25 @@ module front_enclosure_bottom() {
         translate([-(enclosure_w/2), 0, wall + clearance + jst_cable_h/2])
             cube([wall * 2 + 1, jst_cable_w + 1, jst_cable_h + 1], center=true);
         
-        // Mounting screw holes through bottom (full penetration into cavity)
+        // Holes cut through everything (including reinforcement pads)
+        
+        // Mounting screw holes through bottom (ribbed for wood screws)
         for(x = [-1, 1]) {
             for(y = [-1, 1]) {
                 translate([x * (sensor_pcb_w/2 - hole_offset), 
                           y * (sensor_pcb_h/2 - hole_offset), 
                           -0.5])
-                    cylinder(d=2.5, h=enclosure_d + 1);
+                    ribbed_boss_hole(boss_hole, boss_rib_id, boss_rib_width, 
+                                    boss_rib_count, enclosure_d + 1);
             }
         }
         
-        // Screw boss pilot holes
+        // Ribbed screw boss holes
         for(x = [-1, 1]) {
             for(y = [-1, 1]) {
                 translate([x * boss_x, y * boss_y, -0.5])
-                    cylinder(d=boss_id, h=enclosure_d + 2);
+                    ribbed_boss_hole(boss_hole, boss_rib_id, boss_rib_width, 
+                                    boss_rib_count, enclosure_d + 2);
             }
         }
     }
@@ -209,11 +251,15 @@ module front_enclosure_top() {
         // Sensor window (5mm along length x 6mm across, full penetration)
         cube([5, 6, lid_thickness * 4], center=true);
         
-        // Screw clearance holes (extended depth to guarantee full penetration)
+        // Screw clearance holes with counterbore for screw heads
         for(x = [-1, 1]) {
             for(y = [-1, 1]) {
+                // Shaft clearance hole (full penetration)
                 translate([x * boss_x, y * boss_y, -1])
                     cylinder(d=boss_clearance, h=lid_thickness + 4);
+                // Counterbore for screw head (from top)
+                translate([x * boss_x, y * boss_y, lid_thickness - boss_counterbore_depth])
+                    cylinder(d=boss_counterbore_d, h=boss_counterbore_depth + 2);
             }
         }
     }
@@ -285,7 +331,7 @@ module hip_enclosure_bottom() {
                 translate([0, y * (enclosure_h/2), 0])
                     rotate([0, 0, y > 0 ? 0 : 180])
                         belt_tab(tab_total_w, tab_total_l, tab_thickness,
-                                belt_slot_w, belt_slot_h, edge_r);
+                                belt_slot_w, belt_slot_h, tab_r);
             }
             
             // Screw bosses in corners (full height)
@@ -297,9 +343,17 @@ module hip_enclosure_bottom() {
             }
         }
         
-        // Interior cavity
-        translate([0, 0, wall + internal_d/2])
-            cube([internal_w, internal_h, internal_d + 1], center=true);
+        // Interior cavity (with boss zones excluded)
+        difference() {
+            translate([0, 0, wall + internal_d/2])
+                cube([internal_w, internal_h, internal_d + 1], center=true);
+            for(x = [-1, 1]) {
+                for(y = [-1, 1]) {
+                    translate([x * boss_x, y * boss_y, -0.5])
+                        cylinder(d=boss_od + 1, h=enclosure_d + 2);
+                }
+            }
+        }
         
         // Feather placement area
         translate([0, feather_y_center, wall + clearance])
@@ -332,21 +386,23 @@ module hip_enclosure_bottom() {
             rotate([90, 0, 0])
                 cylinder(d=2, h=1);
         
-        // Mounting screw access for Feather
+        // Mounting screw holes for Feather (ribbed for wood screws)
         for(x = [-1, 1]) {
             for(y = [-1, 1]) {
                 translate([x * (feather_w/2 - hole_offset), 
                           feather_y_center + y * (feather_h/2 - hole_offset), 
                           -0.5])
-                    cylinder(d=2.5, h=wall + 1);
+                    ribbed_boss_hole(boss_hole, boss_rib_id, boss_rib_width, 
+                                    boss_rib_count, wall + 2);
             }
         }
         
-        // Screw boss pilot holes
+        // Ribbed screw boss holes
         for(x = [-1, 1]) {
             for(y = [-1, 1]) {
                 translate([x * boss_x, y * boss_y, -0.5])
-                    cylinder(d=boss_id, h=enclosure_d + 2);
+                    ribbed_boss_hole(boss_hole, boss_rib_id, boss_rib_width, 
+                                    boss_rib_count, enclosure_d + 2);
             }
         }
     }
@@ -369,11 +425,15 @@ module hip_enclosure_top() {
         // Lid with rounded top edges
         rounded_box(enclosure_w, enclosure_h, lid_thickness, edge_r);
         
-        // Screw clearance holes (extended depth to guarantee full penetration)
+        // Screw clearance holes with counterbore for screw heads
         for(x = [-1, 1]) {
             for(y = [-1, 1]) {
+                // Shaft clearance hole (full penetration)
                 translate([x * boss_x, y * boss_y, -1])
                     cylinder(d=boss_clearance, h=lid_thickness + 4);
+                // Counterbore for screw head (from top)
+                translate([x * boss_x, y * boss_y, lid_thickness - boss_counterbore_depth])
+                    cylinder(d=boss_counterbore_d, h=boss_counterbore_depth + 2);
             }
         }
     }
