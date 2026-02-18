@@ -169,7 +169,7 @@ Also exposes the standard **Battery Service (0x180F)**.
 
 ### Prerequisites (runtime only)
 
-- Intiface Central running (https://intiface.com/central/)
+- Intiface Central running (https://intiface.com/#intiface-central)
 - BlueZ (Linux) or equivalent BLE stack
 
 On Arch:
