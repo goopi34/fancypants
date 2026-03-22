@@ -68,13 +68,16 @@ $(FW_BUILD_DIR)/zephyr.uf2: firmware/src/*.c firmware/src/*.h firmware/prj.conf 
 		$(NCS_IMAGE) \
 		west build -p always -b $(BOARD) --build-dir /workdir/project/build -- -DAPP_VERSION_STRING=$(VERSION)
 	@$(CONTAINER) run --rm \
-		-v $(FW_BUILD_DIR):/fix \
-		$(NCS_IMAGE) \
-		chown -R $(shell id -u):$(shell id -g) /fix
-	@echo ""
-	@UF2=$$(find $(FW_BUILD_DIR) -name "zephyr.uf2" | head -1) && \
-		[ -n "$$UF2" ] || { echo "ERROR: zephyr.uf2 not found under $(FW_BUILD_DIR)"; exit 1; } && \
-		cp "$$UF2" $(FW_BUILD_DIR)/zephyr.uf2
+		-e HOST_UID=$(shell id -u) \
+		-e HOST_GID=$(shell id -g) \
+		-v $(FW_BUILD_DIR):/build \
+		$(CLANG_IMAGE) \
+		sh -c '\
+			UF2=$$(find /build -name "zephyr.uf2" | head -1) && \
+			[ -n "$$UF2" ] || { echo "ERROR: zephyr.uf2 not found after build"; exit 1; } && \
+			cp "$$UF2" /build/zephyr.uf2 && \
+			chown -R $$HOST_UID:$$HOST_GID /build \
+		'
 	@echo "✓ Firmware built: $(FW_BUILD_DIR)/zephyr.uf2"
 
 # ── Middleware ─────────────────────────────────────────────────────────
