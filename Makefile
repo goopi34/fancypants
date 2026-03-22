@@ -72,9 +72,9 @@ $(FW_BUILD_DIR)/zephyr.uf2: firmware/src/*.c firmware/src/*.h firmware/prj.conf 
 		$(NCS_IMAGE) \
 		chown -R $(shell id -u):$(shell id -g) /fix
 	@echo ""
-	@echo "✓ Firmware built: $(FW_BUILD_DIR)/firmware/zephyr/zephyr.uf2"
+	@echo "✓ Firmware built: $(FW_BUILD_DIR)/zephyr/zephyr.uf2"
 	@# Copy UF2 to top-level build dir for convenience
-	@cp $(FW_BUILD_DIR)/firmware/zephyr/zephyr.uf2 $(FW_BUILD_DIR)/zephyr.uf2 2>/dev/null || \
+	@cp $(FW_BUILD_DIR)/zephyr/zephyr.uf2 $(FW_BUILD_DIR)/zephyr.uf2 2>/dev/null || \
 		echo "  (UF2 not generated — check if board target supports UF2 output)"
 
 # ── Middleware ─────────────────────────────────────────────────────────
