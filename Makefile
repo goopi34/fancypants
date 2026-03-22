@@ -36,7 +36,7 @@ FW_BUILD_DIR   := $(BUILD_DIR)/firmware
 MW_BUILD_DIR   := $(BUILD_DIR)/middleware
 
 # Auto-detect container runtime
-CONTAINER ?= $(shell command -v podman 2>/dev/null && echo podman || echo docker)
+CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
 
 # Application version: strip leading v from tag, or use branch+sha, or "dev"
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)
