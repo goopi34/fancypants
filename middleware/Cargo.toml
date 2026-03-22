@@ -35,3 +35,9 @@ anyhow = "1"
 
 # UUID (used by btleplug characteristic matching)
 uuid = "1"
+
+# Trait objects for testable async interfaces
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

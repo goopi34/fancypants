@@ -140,4 +140,162 @@ mod tests {
             "non-inverted closest should be ~0.0, got {intensity}"
         );
     }
+
+    #[test]
+    fn test_smoothing_first_call_returns_raw() {
+        let mut cfg = default_config();
+        cfg.smoothing = 0.5;
+        let mut mapper = RangeMapper::new(cfg);
+        // First call should return raw value regardless of smoothing
+        let intensity = mapper.map(30); // closest -> ~1.0 inverted
+        assert!(
+            (intensity - 1.0).abs() < 0.01,
+            "first call should return raw, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_smoothing_converges() {
+        let mut cfg = default_config();
+        cfg.smoothing = 0.5;
+        let mut mapper = RangeMapper::new(cfg);
+        // Feed the same value repeatedly; EMA should converge to it
+        for _ in 0..20 {
+            mapper.map(165); // midpoint -> ~0.5
+        }
+        let intensity = mapper.map(165);
+        assert!(
+            (intensity - 0.5).abs() < 0.05,
+            "should converge to ~0.5, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_smoothing_dampens_spike() {
+        let mut cfg = default_config();
+        cfg.smoothing = 0.8; // heavy smoothing
+        let mut mapper = RangeMapper::new(cfg);
+        // Establish baseline at midpoint
+        for _ in 0..20 {
+            mapper.map(165);
+        }
+        // Spike to max
+        let spiked = mapper.map(30);
+        // With 0.8 smoothing, output should be much less than 1.0
+        assert!(spiked < 0.7, "spike should be dampened, got {spiked}");
+    }
+
+    #[test]
+    fn test_smoothing_zero_is_passthrough() {
+        let mut cfg = default_config();
+        cfg.smoothing = 0.0;
+        let mut mapper = RangeMapper::new(cfg);
+        mapper.map(165); // initialize
+        let a = mapper.map(30);
+        let b = mapper.map(300);
+        assert!(
+            (a - 1.0).abs() < 0.01,
+            "smoothing=0 should pass through, got {a}"
+        );
+        assert!(
+            (b - 0.0).abs() < 0.01,
+            "smoothing=0 should pass through, got {b}"
+        );
+    }
+
+    #[test]
+    fn test_smoothing_one_holds_first() {
+        let mut cfg = default_config();
+        cfg.smoothing = 1.0; // max smoothing: output = 1.0 * prev + 0.0 * new
+        let mut mapper = RangeMapper::new(cfg);
+        let first = mapper.map(30); // ~1.0
+                                    // All subsequent calls should stay at first value
+        let second = mapper.map(300);
+        let third = mapper.map(300);
+        assert!(
+            (first - 1.0).abs() < 0.01,
+            "first should be ~1.0, got {first}"
+        );
+        assert!(
+            (second - 1.0).abs() < 0.01,
+            "smoothing=1.0 should hold first value, got {second}"
+        );
+        assert!(
+            (third - 1.0).abs() < 0.01,
+            "smoothing=1.0 should hold first value, got {third}"
+        );
+    }
+
+    #[test]
+    fn test_update_config_changes_behavior() {
+        let mut mapper = RangeMapper::new(default_config());
+        let before = mapper.map(30); // inverted -> ~1.0
+        assert!((before - 1.0).abs() < 0.01);
+
+        let mut new_cfg = default_config();
+        new_cfg.invert = false;
+        mapper.update_config(new_cfg);
+        let after = mapper.map(30); // non-inverted -> ~0.0
+        assert!(
+            (after - 0.0).abs() < 0.01,
+            "after config update, should be ~0.0, got {after}"
+        );
+    }
+
+    #[test]
+    fn test_zero_range_span() {
+        let mut cfg = default_config();
+        cfg.min_range_mm = 100;
+        cfg.max_range_mm = 100;
+        cfg.deadzone_mm = 0;
+        let mut mapper = RangeMapper::new(cfg);
+        let intensity = mapper.map(100);
+        // With zero span, normalized = 0.0, inverted = 1.0, scaled = 1.0
+        assert!(
+            (intensity - 1.0).abs() < 0.01,
+            "zero span inverted should be 1.0, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_below_min_clamped() {
+        let mut mapper = RangeMapper::new(default_config());
+        // 10mm is below min_range_mm (30), should clamp to 30 -> same as closest
+        let intensity = mapper.map(10);
+        assert!(
+            (intensity - 1.0).abs() < 0.01,
+            "below min should clamp to closest, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_deadzone_disabled() {
+        let mut cfg = default_config();
+        cfg.deadzone_mm = 0; // disabled
+        let mut mapper = RangeMapper::new(cfg);
+        // Far distance should still map (clamped to max_range), not return 0
+        let intensity = mapper.map(1000);
+        assert!(
+            (intensity - 0.0).abs() < 0.01,
+            "clamped to max_range (inverted) should be ~0.0, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_custom_intensity_range() {
+        let mut cfg = default_config();
+        cfg.min_intensity = 0.2;
+        cfg.max_intensity = 0.8;
+        let mut mapper = RangeMapper::new(cfg);
+        let closest = mapper.map(30); // inverted -> max_intensity
+        let farthest = mapper.map(300); // inverted -> min_intensity
+        assert!(
+            (closest - 0.8).abs() < 0.01,
+            "closest should be max_intensity 0.8, got {closest}"
+        );
+        assert!(
+            (farthest - 0.2).abs() < 0.01,
+            "farthest should be min_intensity 0.2, got {farthest}"
+        );
+    }
 }

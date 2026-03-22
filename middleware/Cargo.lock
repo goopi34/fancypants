@@ -687,12 +687,14 @@ name = "fancypants"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "btleplug",
  "buttplug",
  "clap",
  "ctrlc",
  "futures",
  "serde",
+ "tempfile",
  "tokio",
  "toml",
  "tracing",
