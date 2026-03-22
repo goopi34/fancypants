@@ -40,7 +40,9 @@ impl ToyController {
 
         let devices = self.client.devices();
         if devices.is_empty() {
-            anyhow::bail!("No Buttplug devices found. Make sure your toy is on and paired in Intiface.");
+            anyhow::bail!(
+                "No Buttplug devices found. Make sure your toy is on and paired in Intiface."
+            );
         }
 
         let device = if let Some(idx) = device_index {
@@ -58,7 +60,9 @@ impl ToyController {
                         .scalar_cmd()
                         .as_ref()
                         .map(|attrs| {
-                            attrs.iter().any(|a| *a.actuator_type() == ActuatorType::Vibrate)
+                            attrs
+                                .iter()
+                                .any(|a| *a.actuator_type() == ActuatorType::Vibrate)
                         })
                         .unwrap_or(false)
                 })
@@ -67,11 +71,7 @@ impl ToyController {
                 .clone()
         };
 
-        info!(
-            "Using device: {} (index {})",
-            device.name(),
-            device.index()
-        );
+        info!("Using device: {} (index {})", device.name(), device.index());
         self.target_device = Some(device);
         Ok(())
     }

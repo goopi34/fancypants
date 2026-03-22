@@ -1,6 +1,4 @@
-use btleplug::api::{
-    Central, Manager as _, Peripheral as _, ScanFilter,
-};
+use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
 use btleplug::platform::{Manager, Peripheral};
 use futures::StreamExt;
 use std::time::Duration;
@@ -9,7 +7,7 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 // Must match firmware UUIDs
-const RANGE_SERVICE_UUID: Uuid = Uuid::from_u128(0x00000001_7272_6e67_6669_6e6465720000);
+const _RANGE_SERVICE_UUID: Uuid = Uuid::from_u128(0x00000001_7272_6e67_6669_6e6465720000);
 const RANGE_CHAR_UUID: Uuid = Uuid::from_u128(0x00000002_7272_6e67_6669_6e6465720000);
 const _RANGE_CONFIG_CHAR_UUID: Uuid = Uuid::from_u128(0x00000003_7272_6e67_6669_6e6465720000);
 
@@ -37,7 +35,10 @@ pub async fn find_device(device_name: &str, timeout_secs: u64) -> anyhow::Result
     info!("Using adapter: {:?}", adapter.adapter_info().await?);
 
     adapter.start_scan(ScanFilter::default()).await?;
-    info!("Scanning for '{}' ({}s timeout)...", device_name, timeout_secs);
+    info!(
+        "Scanning for '{}' ({}s timeout)...",
+        device_name, timeout_secs
+    );
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
 
@@ -94,13 +95,11 @@ pub async fn run_ble_client(
     let mut events = peripheral.notifications().await?;
 
     while let Some(event) = events.next().await {
-        if event.uuid == RANGE_CHAR_UUID {
-            if event.value.len() >= 2 {
-                let distance_mm = u16::from_le_bytes([event.value[0], event.value[1]]);
-                debug!("Range: {}mm", distance_mm);
-                if tx.send(BleEvent::RangeUpdate(distance_mm)).is_err() {
-                    break;
-                }
+        if event.uuid == RANGE_CHAR_UUID && event.value.len() >= 2 {
+            let distance_mm = u16::from_le_bytes([event.value[0], event.value[1]]);
+            debug!("Range: {}mm", distance_mm);
+            if tx.send(BleEvent::RangeUpdate(distance_mm)).is_err() {
+                break;
             }
         }
     }

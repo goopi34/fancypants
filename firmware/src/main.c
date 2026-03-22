@@ -14,17 +14,17 @@
  *   - Device Information Service (optional, via Kconfig)
  */
 
-#include <zephyr/kernel.h>
-#include <zephyr/device.h>
-#include <zephyr/drivers/sensor.h>
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/gap.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/bluetooth/services/bas.h>
+#include <zephyr/device.h>
+#include <zephyr/drivers/sensor.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
-#include "range_service.h"
 #include "battery.h"
+#include "range_service.h"
 
 LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
 
@@ -36,14 +36,13 @@ static struct bt_conn *current_conn;
 
 /* Advertising data */
 static const struct bt_data ad[] = {
-	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-	BT_DATA_BYTES(BT_DATA_UUID128_ALL, RANGE_SERVICE_UUID_VAL),
+    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL, RANGE_SERVICE_UUID_VAL),
 };
 
 /* Scan response - device name */
 static const struct bt_data sd[] = {
-	BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME,
-		sizeof(CONFIG_BT_DEVICE_NAME) - 1),
+    BT_DATA(BT_DATA_NAME_COMPLETE, CONFIG_BT_DEVICE_NAME, sizeof(CONFIG_BT_DEVICE_NAME) - 1),
 };
 
 /* BLE connection callbacks */
@@ -68,16 +67,15 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
 	}
 
 	/* Restart advertising */
-	int err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
-				  sd, ARRAY_SIZE(sd));
+	int err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err) {
 		LOG_ERR("Advertising restart failed (err %d)", err);
 	}
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
-	.connected = connected,
-	.disconnected = disconnected,
+    .connected = connected,
+    .disconnected = disconnected,
 };
 
 /* Read VL53L0X and return distance in mm, or negative on error */
@@ -202,8 +200,7 @@ int main(void)
 	LOG_INF("Bluetooth initialized");
 
 	/* Start advertising */
-	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad),
-			      sd, ARRAY_SIZE(sd));
+	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), sd, ARRAY_SIZE(sd));
 	if (err) {
 		LOG_ERR("Advertising failed to start: %d", err);
 		return err;
@@ -211,16 +208,12 @@ int main(void)
 	LOG_INF("Advertising as \"%s\"", CONFIG_BT_DEVICE_NAME);
 
 	/* Spawn worker threads */
-	k_thread_create(&sensor_thread, sensor_stack,
-			K_THREAD_STACK_SIZEOF(sensor_stack),
-			sensor_thread_fn, NULL, NULL, NULL,
-			K_PRIO_COOP(7), 0, K_NO_WAIT);
+	k_thread_create(&sensor_thread, sensor_stack, K_THREAD_STACK_SIZEOF(sensor_stack),
+			sensor_thread_fn, NULL, NULL, NULL, K_PRIO_COOP(7), 0, K_NO_WAIT);
 	k_thread_name_set(&sensor_thread, "sensor");
 
-	k_thread_create(&battery_thread, battery_stack,
-			K_THREAD_STACK_SIZEOF(battery_stack),
-			battery_thread_fn, NULL, NULL, NULL,
-			K_PRIO_PREEMPT(10), 0, K_NO_WAIT);
+	k_thread_create(&battery_thread, battery_stack, K_THREAD_STACK_SIZEOF(battery_stack),
+			battery_thread_fn, NULL, NULL, NULL, K_PRIO_PREEMPT(10), 0, K_NO_WAIT);
 	k_thread_name_set(&battery_thread, "battery");
 
 	LOG_INF("Rangefinder BLE running");

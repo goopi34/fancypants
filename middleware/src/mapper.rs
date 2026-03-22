@@ -67,6 +67,7 @@ impl RangeMapper {
         self.smoothed_intensity
     }
 
+    #[allow(dead_code)]
     pub fn update_config(&mut self, config: MappingConfig) {
         self.config = config;
     }
@@ -92,28 +93,40 @@ mod tests {
     fn test_closest_is_max_intensity() {
         let mut mapper = RangeMapper::new(default_config());
         let intensity = mapper.map(30);
-        assert!((intensity - 1.0).abs() < 0.01, "closest should be ~1.0, got {intensity}");
+        assert!(
+            (intensity - 1.0).abs() < 0.01,
+            "closest should be ~1.0, got {intensity}"
+        );
     }
 
     #[test]
     fn test_farthest_is_min_intensity() {
         let mut mapper = RangeMapper::new(default_config());
         let intensity = mapper.map(300);
-        assert!((intensity - 0.0).abs() < 0.01, "farthest should be ~0.0, got {intensity}");
+        assert!(
+            (intensity - 0.0).abs() < 0.01,
+            "farthest should be ~0.0, got {intensity}"
+        );
     }
 
     #[test]
     fn test_midpoint() {
         let mut mapper = RangeMapper::new(default_config());
         let intensity = mapper.map(165); // midpoint of 30-300
-        assert!(intensity > 0.4 && intensity < 0.6, "midpoint should be ~0.5, got {intensity}");
+        assert!(
+            intensity > 0.4 && intensity < 0.6,
+            "midpoint should be ~0.5, got {intensity}"
+        );
     }
 
     #[test]
     fn test_deadzone_returns_zero() {
         let mut mapper = RangeMapper::new(default_config());
         let intensity = mapper.map(600);
-        assert!((intensity - 0.0).abs() < 0.01, "deadzone should be 0.0, got {intensity}");
+        assert!(
+            (intensity - 0.0).abs() < 0.01,
+            "deadzone should be 0.0, got {intensity}"
+        );
     }
 
     #[test]
@@ -122,6 +135,9 @@ mod tests {
         cfg.invert = false;
         let mut mapper = RangeMapper::new(cfg);
         let intensity = mapper.map(30);
-        assert!((intensity - 0.0).abs() < 0.01, "non-inverted closest should be ~0.0, got {intensity}");
+        assert!(
+            (intensity - 0.0).abs() < 0.01,
+            "non-inverted closest should be ~0.0, got {intensity}"
+        );
     }
 }
