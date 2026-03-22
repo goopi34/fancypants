@@ -7,6 +7,11 @@
 #   make firmware        Build nRF52 firmware (outputs build/firmware/zephyr.uf2)
 #   make middleware       Build Rust middleware (outputs build/middleware/fancypants)
 #   make all             Build both
+#   make lint            Lint both components (inside containers)
+#   make coverage        Run coverage report (HTML output in build/coverage/)
+#   make test            Run middleware tests (inside container)
+#   make format-middleware Auto-format middleware Rust sources (run once to establish baseline)
+#   make format-firmware Auto-format firmware C/H sources (run once to establish baseline)
 #   make clean           Remove build artifacts
 #   make shell-fw        Drop into firmware build container shell
 #   make shell-mw        Drop into middleware build container shell
@@ -16,12 +21,14 @@
 #   BOARD       nRF board target (default: adafruit_feather_nrf52840)
 #   NCS_TAG     nRF Connect SDK version tag (default: v2.9-branch)
 #   CONTAINER   Container runtime: docker or podman (default: auto-detect)
+#   VERSION     Application version string (default: from git describe)
 
 # ── Configuration ──────────────────────────────────────────────────────
 BOARD          ?= adafruit_feather_nrf52840
 NCS_TAG        ?= v2.9-branch
 NCS_IMAGE      := nordicplayground/nrfconnect-sdk:$(NCS_TAG)
 RUST_IMAGE     := rust:1-bookworm
+CLANG_IMAGE    := ubuntu:24.04
 
 PROJECT_DIR    := $(shell pwd)
 BUILD_DIR      := $(PROJECT_DIR)/build
@@ -31,11 +38,14 @@ MW_BUILD_DIR   := $(BUILD_DIR)/middleware
 # Auto-detect container runtime
 CONTAINER ?= $(shell command -v podman 2>/dev/null && echo podman || echo docker)
 
+# Application version: strip leading v from tag, or use branch+sha, or "dev"
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v//' || echo dev)
+
 # UID/GID forwarding so build artifacts aren't owned by root
 USER_ARGS := -u $(shell id -u):$(shell id -g)
 
 # ── Targets ────────────────────────────────────────────────────────────
-.PHONY: all firmware middleware clean shell-fw shell-mw flash help
+.PHONY: all firmware middleware lint lint-middleware lint-firmware test test-middleware coverage format-middleware format-firmware clean shell-fw shell-mw flash help
 
 all: firmware middleware
 
@@ -45,9 +55,10 @@ firmware: $(FW_BUILD_DIR)/zephyr.uf2
 $(FW_BUILD_DIR)/zephyr.uf2: firmware/src/*.c firmware/src/*.h firmware/prj.conf firmware/Kconfig firmware/CMakeLists.txt firmware/boards/*.overlay
 	@echo "══════════════════════════════════════════════════════════════"
 	@echo "  Building fancypants-nrf52 firmware"
-	@echo "  Board:  $(BOARD)"
-	@echo "  NCS:    $(NCS_TAG)"
-	@echo "  Image:  $(NCS_IMAGE)"
+	@echo "  Board:   $(BOARD)"
+	@echo "  NCS:     $(NCS_TAG)"
+	@echo "  Image:   $(NCS_IMAGE)"
+	@echo "  Version: $(VERSION)"
 	@echo "══════════════════════════════════════════════════════════════"
 	@mkdir -p $(FW_BUILD_DIR)
 	$(CONTAINER) run --rm \
@@ -55,7 +66,7 @@ $(FW_BUILD_DIR)/zephyr.uf2: firmware/src/*.c firmware/src/*.h firmware/prj.conf 
 		-v $(FW_BUILD_DIR):/workdir/project/build \
 		-w /workdir/project/firmware \
 		$(NCS_IMAGE) \
-		west build -p always -b $(BOARD) --build-dir /workdir/project/build
+		west build -p always -b $(BOARD) --build-dir /workdir/project/build -- -DAPP_VERSION_STRING=$(VERSION)
 	@$(CONTAINER) run --rm \
 		-v $(FW_BUILD_DIR):/fix \
 		$(NCS_IMAGE) \
@@ -69,15 +80,17 @@ $(FW_BUILD_DIR)/zephyr.uf2: firmware/src/*.c firmware/src/*.h firmware/prj.conf 
 # ── Middleware ─────────────────────────────────────────────────────────
 middleware: $(MW_BUILD_DIR)/fancypants
 
-$(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml
+$(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml middleware/build.rs
 	@echo "══════════════════════════════════════════════════════════════"
 	@echo "  Building fancypants middleware"
-	@echo "  Image:  $(RUST_IMAGE)"
+	@echo "  Image:   $(RUST_IMAGE)"
+	@echo "  Version: $(VERSION)"
 	@echo "══════════════════════════════════════════════════════════════"
 	@mkdir -p $(MW_BUILD_DIR) $(BUILD_DIR)/cargo-cache
 	$(CONTAINER) run --rm \
 		-e HOST_UID=$(shell id -u) \
 		-e HOST_GID=$(shell id -g) \
+		-e FANCYPANTS_VERSION=$(VERSION) \
 		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
 		-v $(MW_BUILD_DIR):/workdir/output \
 		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
@@ -88,12 +101,125 @@ $(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml
 			cd /tmp/build && \
 			apt-get update -qq && \
 			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev >/dev/null 2>&1 && \
-			cargo build --release 2>&1 && \
+			FANCYPANTS_VERSION=$$FANCYPANTS_VERSION cargo build --release 2>&1 && \
 			cp target/release/fancypants /workdir/output/fancypants && \
 			chown $$HOST_UID:$$HOST_GID /workdir/output/fancypants \
 		'
 	@echo ""
 	@echo "✓ Middleware built: $(MW_BUILD_DIR)/fancypants"
+
+# ── Lint ───────────────────────────────────────────────────────────────
+lint: lint-middleware lint-firmware
+
+lint-middleware:
+	@echo "══════════════════════════════════════════════════════════════"
+	@echo "  Linting middleware (fmt + clippy)"
+	@echo "══════════════════════════════════════════════════════════════"
+	@mkdir -p $(BUILD_DIR)/cargo-cache
+	$(CONTAINER) run --rm \
+		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
+		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-w /workdir \
+		$(RUST_IMAGE) \
+		sh -c '\
+			cp -r middleware /tmp/build && \
+			cd /tmp/build && \
+			apt-get update -qq && \
+			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev >/dev/null 2>&1 && \
+			rustup component add rustfmt clippy 2>/dev/null && \
+			cargo fmt --check && \
+			cargo clippy -- -D warnings \
+		'
+
+lint-firmware:
+	@echo "══════════════════════════════════════════════════════════════"
+	@echo "  Linting firmware (clang-format)"
+	@echo "══════════════════════════════════════════════════════════════"
+	$(CONTAINER) run --rm \
+		-v $(PROJECT_DIR):/workdir:ro \
+		-w /workdir \
+		$(CLANG_IMAGE) \
+		sh -c '\
+			apt-get update -qq && \
+			apt-get install -y -qq clang-format >/dev/null 2>&1 && \
+			find firmware/src -name "*.c" -o -name "*.h" | xargs clang-format --dry-run --Werror \
+		'
+
+# ── Test ───────────────────────────────────────────────────────────────
+test: test-middleware
+
+test-middleware:
+	@echo "══════════════════════════════════════════════════════════════"
+	@echo "  Testing middleware"
+	@echo "══════════════════════════════════════════════════════════════"
+	@mkdir -p $(BUILD_DIR)/cargo-cache
+	$(CONTAINER) run --rm \
+		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
+		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-w /workdir \
+		$(RUST_IMAGE) \
+		sh -c '\
+			cp -r middleware /tmp/build && \
+			cd /tmp/build && \
+			apt-get update -qq && \
+			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev >/dev/null 2>&1 && \
+			cargo test \
+		'
+
+# ── Coverage ───────────────────────────────────────────────────────────
+coverage:
+	@echo "══════════════════════════════════════════════════════════════"
+	@echo "  Middleware coverage (llvm-cov)"
+	@echo "══════════════════════════════════════════════════════════════"
+	@mkdir -p $(BUILD_DIR)/coverage $(BUILD_DIR)/cargo-cache
+	$(CONTAINER) run --rm \
+		-e HOST_UID=$(shell id -u) \
+		-e HOST_GID=$(shell id -g) \
+		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
+		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-v $(BUILD_DIR)/coverage:/workdir/coverage-out \
+		-w /workdir \
+		$(RUST_IMAGE) \
+		sh -c '\
+			cp -r middleware /tmp/build && \
+			cd /tmp/build && \
+			apt-get update -qq && \
+			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev >/dev/null 2>&1 && \
+			rustup component add llvm-tools 2>/dev/null && \
+			cargo install cargo-llvm-cov --quiet 2>&1 | tail -1 && \
+			cargo llvm-cov \
+				--html --output-dir /workdir/coverage-out \
+				--fail-under-lines 1 \
+				2>&1 && \
+			chown -R $$HOST_UID:$$HOST_GID /workdir/coverage-out \
+		'
+	@echo ""
+	@echo "✓ Coverage report: $(BUILD_DIR)/coverage/index.html"
+
+# ── Format (establish baseline) ────────────────────────────────────────
+format-middleware:
+	@echo "Auto-formatting middleware Rust sources with cargo fmt..."
+	$(CONTAINER) run --rm \
+		$(USER_ARGS) \
+		-v $(PROJECT_DIR)/middleware:/workdir/middleware \
+		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-w /workdir/middleware \
+		$(RUST_IMAGE) \
+		sh -c 'rustup component add rustfmt 2>/dev/null && cargo fmt'
+	@echo "✓ Middleware sources formatted"
+
+format-firmware:
+	@echo "Auto-formatting firmware C/H sources with clang-format..."
+	$(CONTAINER) run --rm \
+		-v $(PROJECT_DIR):/workdir \
+		-w /workdir \
+		$(CLANG_IMAGE) \
+		sh -c '\
+			apt-get update -qq && \
+			apt-get install -y -qq clang-format >/dev/null 2>&1 && \
+			find firmware/src -name "*.c" -o -name "*.h" | xargs clang-format -i \
+		'
+	@echo "✓ Firmware sources formatted"
 
 # ── Interactive Shells ─────────────────────────────────────────────────
 shell-fw:
@@ -143,6 +269,14 @@ help:
 	@echo "  make firmware        Build nRF52 firmware (UF2)"
 	@echo "  make middleware       Build Rust middleware binary"
 	@echo "  make all             Build both (default)"
+	@echo "  make lint            Lint both components inside containers"
+	@echo "  make lint-middleware  Run cargo fmt --check and clippy"
+	@echo "  make lint-firmware    Run clang-format --dry-run on firmware sources"
+	@echo "  make test            Run all tests inside containers"
+	@echo "  make coverage        Run middleware coverage (HTML report in build/coverage/)"
+	@echo "  make test-middleware  Run cargo test for middleware"
+	@echo "  make format-middleware Auto-format middleware Rust sources (run once for baseline)"
+	@echo "  make format-firmware  Auto-format firmware C/H sources (run once for baseline)"
 	@echo "  make clean           Remove all build artifacts"
 	@echo "  make shell-fw        Interactive firmware build shell"
 	@echo "  make shell-mw        Interactive middleware build shell"
@@ -152,9 +286,10 @@ help:
 	@echo "  BOARD=<target>       Board target (default: $(BOARD))"
 	@echo "  NCS_TAG=<tag>        NCS version (default: $(NCS_TAG))"
 	@echo "  CONTAINER=<runtime>  docker or podman (default: auto-detect)"
+	@echo "  VERSION=<string>     Version to embed (default: from git describe)"
 	@echo ""
 	@echo "Examples:"
 	@echo "  make firmware BOARD=adafruit_feather_nrf52840/nrf52840/uf2"
 	@echo "  make firmware NCS_TAG=v2.7-branch"
+	@echo "  make all VERSION=1.2.3"
 	@echo "  make CONTAINER=podman"
-	

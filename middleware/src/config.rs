@@ -55,7 +55,7 @@ impl Default for Config {
                 reconnect_delay_secs: 5,
             },
             mapping: MappingConfig {
-                invert: true,  // closer = more intense
+                invert: true, // closer = more intense
                 min_range_mm: 30,
                 max_range_mm: 300,
                 min_intensity: 0.0,

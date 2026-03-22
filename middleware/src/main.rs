@@ -15,6 +15,7 @@ use tracing::{error, info, warn};
 #[derive(Parser, Debug)]
 #[command(
     name = "fancypants",
+    version = env!("FANCYPANTS_VERSION"),
     about = "BLE rangefinder to Buttplug.io middleware",
     long_about = "Connects to a fancypants-nrf52 BLE rangefinder and translates distance \
                    readings into haptic intensity for toys via Intiface Engine."
@@ -93,10 +94,7 @@ async fn main() -> anyhow::Result<()> {
                 if !running.load(Ordering::SeqCst) {
                     break;
                 }
-                info!(
-                    "Reconnecting in {}s...",
-                    config.ble.reconnect_delay_secs
-                );
+                info!("Reconnecting in {}s...", config.ble.reconnect_delay_secs);
                 tokio::time::sleep(std::time::Duration::from_secs(
                     config.ble.reconnect_delay_secs,
                 ))

@@ -1,7 +1,7 @@
 #include "battery.h"
 
-#include <zephyr/kernel.h>
 #include <zephyr/drivers/adc.h>
+#include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
 LOG_MODULE_REGISTER(battery, LOG_LEVEL_INF);
@@ -14,11 +14,11 @@ LOG_MODULE_REGISTER(battery, LOG_LEVEL_INF);
  * nRF52840 ADC internal reference = 0.6V, gain 1/6 = 3.6V full scale.
  */
 
-#define ADC_RESOLUTION    12
-#define ADC_GAIN          ADC_GAIN_1_6
-#define ADC_REFERENCE     ADC_REF_INTERNAL    /* 0.6V */
-#define ADC_CHANNEL       5                    /* AIN5 = P0.29 */
-#define DIVIDER_RATIO     2                    /* VBAT/2 resistor divider */
+#define ADC_RESOLUTION 12
+#define ADC_GAIN ADC_GAIN_1_6
+#define ADC_REFERENCE ADC_REF_INTERNAL /* 0.6V */
+#define ADC_CHANNEL 5		       /* AIN5 = P0.29 */
+#define DIVIDER_RATIO 2		       /* VBAT/2 resistor divider */
 
 /* Full scale voltage in mV: 0.6V * 6 (gain) = 3.6V = 3600mV */
 #define ADC_FULL_SCALE_MV 3600
@@ -27,20 +27,20 @@ static const struct device *adc_dev;
 static int16_t adc_buffer;
 
 static struct adc_channel_cfg channel_cfg = {
-	.gain = ADC_GAIN,
-	.reference = ADC_REFERENCE,
-	.acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40),
-	.channel_id = ADC_CHANNEL,
+    .gain = ADC_GAIN,
+    .reference = ADC_REFERENCE,
+    .acquisition_time = ADC_ACQ_TIME(ADC_ACQ_TIME_MICROSECONDS, 40),
+    .channel_id = ADC_CHANNEL,
 #if defined(CONFIG_ADC_NRFX_SAADC)
-	.input_positive = SAADC_CH_PSELP_PSELP_AnalogInput5,
+    .input_positive = SAADC_CH_PSELP_PSELP_AnalogInput5,
 #endif
 };
 
 static struct adc_sequence sequence = {
-	.channels = BIT(ADC_CHANNEL),
-	.buffer = &adc_buffer,
-	.buffer_size = sizeof(adc_buffer),
-	.resolution = ADC_RESOLUTION,
+    .channels = BIT(ADC_CHANNEL),
+    .buffer = &adc_buffer,
+    .buffer_size = sizeof(adc_buffer),
+    .resolution = ADC_RESOLUTION,
 };
 
 int battery_init(void)
