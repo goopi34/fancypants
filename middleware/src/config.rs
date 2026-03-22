@@ -87,7 +87,7 @@ impl Config {
         Ok(())
     }
 
-    fn validate(&self) -> anyhow::Result<()> {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
         if self.mapping.min_intensity < 0.0 || self.mapping.min_intensity > 1.0 {
             anyhow::bail!("min_intensity must be 0.0-1.0");
         }
@@ -101,5 +101,125 @@ impl Config {
             anyhow::bail!("smoothing must be 0.0-1.0");
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn valid_toml() -> String {
+        toml::to_string_pretty(&Config::default()).unwrap()
+    }
+
+    #[test]
+    fn test_default_config_is_valid() {
+        let config = Config::default();
+        config.validate().unwrap();
+    }
+
+    #[test]
+    fn test_load_valid_toml() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(valid_toml().as_bytes()).unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(config.ble.device_name, "Rangefinder");
+        assert_eq!(config.mapping.min_range_mm, 30);
+    }
+
+    #[test]
+    fn test_load_nonexistent_file() {
+        let result = Config::load(Path::new("/tmp/nonexistent_fancypants_cfg.toml"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_invalid_toml_syntax() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        f.write_all(b"this is not [valid toml").unwrap();
+        let result = Config::load(f.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_load_bad_values_triggers_validation() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let toml = valid_toml().replace("min_intensity = 0.0", "min_intensity = 2.0");
+        f.write_all(toml.as_bytes()).unwrap();
+        let result = Config::load(f.path());
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("min_intensity"),
+            "error should mention min_intensity"
+        );
+    }
+
+    #[test]
+    fn test_save_default_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        Config::save_default(&path).unwrap();
+        let loaded = Config::load(&path).unwrap();
+        let default = Config::default();
+        assert_eq!(loaded.ble.device_name, default.ble.device_name);
+        assert_eq!(loaded.mapping.min_range_mm, default.mapping.min_range_mm);
+        assert_eq!(loaded.mapping.max_range_mm, default.mapping.max_range_mm);
+        assert!((loaded.mapping.smoothing - default.mapping.smoothing).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_validate_min_intensity_out_of_range() {
+        let mut config = Config::default();
+        config.mapping.min_intensity = -0.1;
+        assert!(config.validate().is_err());
+
+        config.mapping.min_intensity = 1.1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_max_intensity_out_of_range() {
+        let mut config = Config::default();
+        config.mapping.max_intensity = -0.1;
+        assert!(config.validate().is_err());
+
+        config.mapping.max_intensity = 1.1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_min_range_gte_max() {
+        let mut config = Config::default();
+        config.mapping.min_range_mm = 300;
+        config.mapping.max_range_mm = 300;
+        assert!(config.validate().is_err());
+
+        config.mapping.min_range_mm = 400;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_smoothing_out_of_range() {
+        let mut config = Config::default();
+        config.mapping.smoothing = -0.1;
+        assert!(config.validate().is_err());
+
+        config.mapping.smoothing = 1.1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_boundary_values_pass() {
+        let mut config = Config::default();
+        config.mapping.min_intensity = 0.0;
+        config.mapping.max_intensity = 1.0;
+        config.mapping.smoothing = 0.0;
+        config.validate().unwrap();
+
+        config.mapping.min_intensity = 1.0;
+        config.mapping.max_intensity = 0.0; // swapped but both in range
+        config.mapping.smoothing = 1.0;
+        config.validate().unwrap();
     }
 }

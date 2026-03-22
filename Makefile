@@ -192,7 +192,7 @@ coverage:
 			cargo install cargo-llvm-cov --quiet 2>&1 | tail -1 && \
 			cargo llvm-cov \
 				--html --output-dir /workdir/coverage-out \
-				--fail-under-lines 1 \
+				--fail-under-lines 80 \
 				2>&1 && \
 			chown -R $$HOST_UID:$$HOST_GID /workdir/coverage-out \
 		'
