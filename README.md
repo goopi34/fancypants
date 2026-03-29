@@ -1,7 +1,7 @@
 # Fancypants
 
-![Those truly are some fancy pants.](fancypants.svg)
-
+<img src="https://raw.githubusercontent.com/goopi34/fancypants/36529f205641dd564968a7887d93dd079433b4ab/fancypants.svg" width="175">
+<br/>
 A two-part system that uses an nRF52840 + VL53L0X time-of-flight sensor to control
 sex toys through Intiface Engine. "Wave your hand" closer to the sensor for more
 intensity, pull away to reduce it.
