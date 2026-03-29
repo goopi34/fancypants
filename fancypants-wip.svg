@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="121.53948mm"
+   height="66.686424mm"
+   viewBox="0 0 121.53948 66.686424"
+   version="1.1"
+   id="svg1"
+   inkscape:export-filename="fancypants.png"
+   inkscape:export-xdpi="96"
+   inkscape:export-ydpi="96"
+   inkscape:version="1.4.3 (0d15f75042, 2025-12-25)"
+   sodipodi:docname="fancypants-wip.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#505050"
+     bordercolor="#eeeeee"
+     borderopacity="1"
+     inkscape:showpageshadow="0"
+     inkscape:pageopacity="0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#505050"
+     inkscape:document-units="mm"
+     showguides="true"
+     inkscape:zoom="1.0425132"
+     inkscape:cx="455.62974"
+     inkscape:cy="246.04006"
+     inkscape:window-width="1920"
+     inkscape:window-height="1022"
+     inkscape:window-x="0"
+     inkscape:window-y="0"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1" />
+  <defs
+     id="defs1" />
+  <g
+     inkscape:label="Layer 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-44.512766,-36.265826)">
+    <path
+       id="path5"
+       style="fill:#de8787;stroke-width:0.264583"
+       d="m 161.45046,36.267384 c -0.22884,-0.168263 -13.10702,13.349116 -13.38782,13.391946 -0.28079,0.04283 -16.60332,-9.020548 -16.77158,-8.79171 -0.16826,0.228837 13.34911,13.10702 13.39195,13.38781 0.003,0.01853 -0.0343,0.10686 -0.10542,0.2558 0.91802,-0.07017 1.84853,-0.14214 2.79156,-0.21601 0.11067,-0.0087 0.7362,1.4476 1.59938,3.60857 0.17945,-0.17068 0.28749,-0.2652 0.31058,-0.26872 0.28079,-0.04283 16.60332,9.02003 16.77158,8.7912 0.16827,-0.22884 -13.34911,-13.10702 -13.39194,-13.38782 -0.0428,-0.28079 9.02055,-16.602803 8.79171,-16.771066 z M 148.96853,57.90379 c -2.00257,1.90474 -12.8667,13.27765 -13.07672,13.12323 -0.21374,-0.15716 7.67828,-14.40729 8.68578,-16.51579 -38.849,2.96967 -55.79041,2.64354 -91.14431,-0.04754 -3.8e-4,8.8e-4 -9.19546,21.443117 -8.91419,21.513927 32.41318,8.1594 45.10164,26.420613 45.10164,26.420613 8.249735,0.74443 8.23876,0.73162 16.75299,0.004 0.66496,-0.0568 14.42092,-16.415703 49.35822,-26.457303 0.0798,-0.023 -4.30561,-11.888217 -6.76341,-18.041277 z"
+       sodipodi:nodetypes="sssccscsssscscccssccc" />
+  </g>
+</svg>
