@@ -76,7 +76,9 @@ $(FW_BUILD_DIR)/zephyr.uf2: firmware/src/*.c firmware/src/*.h firmware/prj.conf 
 			UF2=$$(find /build -name "zephyr.uf2" | head -1) && \
 			[ -n "$$UF2" ] || { echo "ERROR: zephyr.uf2 not found after build"; exit 1; } && \
 			cp "$$UF2" /build/zephyr.uf2 && \
-			chown -R $$HOST_UID:$$HOST_GID /build \
+			if [ "$$(stat -c %u /build)" != "0" ]; then \
+				chown -R $$HOST_UID:$$HOST_GID /build; \
+			fi \
 		'
 	@echo "✓ Firmware built: $(FW_BUILD_DIR)/zephyr.uf2"
 
@@ -108,7 +110,9 @@ $(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml middleware
 			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev >/dev/null 2>&1 && \
 			FANCYPANTS_VERSION=$$FANCYPANTS_VERSION cargo build --release 2>&1 && \
 			cp $$CARGO_TARGET_DIR/release/fancypants /workdir/output/fancypants && \
-			chown $$HOST_UID:$$HOST_GID /workdir/output/fancypants \
+			if [ "$$(stat -c %u /workdir/output)" != "0" ]; then \
+				chown $$HOST_UID:$$HOST_GID /workdir/output/fancypants; \
+			fi \
 		'
 	@echo ""
 	@echo "✓ Middleware built: $(MW_BUILD_DIR)/fancypants"
@@ -202,7 +206,9 @@ coverage:
 				--html --output-dir /workdir/coverage-out \
 				--fail-under-lines 80 \
 				2>&1 && \
-			chown -R $$HOST_UID:$$HOST_GID /workdir/coverage-out \
+			if [ "$$(stat -c %u /workdir/coverage-out)" != "0" ]; then \
+				chown -R $$HOST_UID:$$HOST_GID /workdir/coverage-out; \
+			fi \
 		'
 	@echo ""
 	@echo "✓ Coverage report: $(BUILD_DIR)/coverage/html/index.html"

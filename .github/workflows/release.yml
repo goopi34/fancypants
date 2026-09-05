@@ -7,6 +7,11 @@ on:
 permissions:
   contents: write
 
+# GitHub runners ship both docker and podman; podman there is rootless, which
+# breaks host ownership of files written by build containers. Pin docker.
+env:
+  CONTAINER: docker
+
 jobs:
   release:
     name: Build & Release

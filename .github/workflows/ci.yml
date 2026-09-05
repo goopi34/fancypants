@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
 
+# GitHub runners ship both docker and podman; podman there is rootless, which
+# breaks host ownership of files written by build containers. Pin docker.
+env:
+  CONTAINER: docker
+
 jobs:
   lint:
     name: Lint
