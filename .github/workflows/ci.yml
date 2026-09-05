@@ -3,6 +3,11 @@ name: CI
 on:
   pull_request:
 
+# GitHub runners ship both docker and podman; podman there is rootless, which
+# breaks host ownership of files written by build containers. Pin docker.
+env:
+  CONTAINER: docker
+
 jobs:
   lint:
     name: Lint
@@ -23,4 +28,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: build/coverage/index.html
+          path: build/coverage/html/
+          if-no-files-found: error

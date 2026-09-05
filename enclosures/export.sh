@@ -1,6 +1,6 @@
 #!/bin/bash
 # Export each OpenSCAD object as a separate STL file
-# Usage: ./export_scad.sh [-v] <source.scad> [output_dir]
+# Usage: ./export.sh [-v] <source.scad> [output_dir]
 VERBOSE=0
 while getopts "v" opt; do
     case $opt in

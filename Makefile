@@ -66,7 +66,7 @@ $(FW_BUILD_DIR)/zephyr.uf2: firmware/src/*.c firmware/src/*.h firmware/prj.conf 
 		-v $(FW_BUILD_DIR):/workdir/project/build \
 		-w /workdir/project/firmware \
 		$(NCS_IMAGE) \
-		west build -p always -b $(BOARD) --build-dir /workdir/project/build -- -DAPP_VERSION_STRING=$(VERSION)
+		west build -p always -b $(BOARD) --build-dir /workdir/project/build -- -Dfirmware_CONFIG_APP_VERSION_STRING=\"$(VERSION)\"
 	@$(CONTAINER) run --rm \
 		-e HOST_UID=$(shell id -u) \
 		-e HOST_GID=$(shell id -g) \
@@ -76,7 +76,9 @@ $(FW_BUILD_DIR)/zephyr.uf2: firmware/src/*.c firmware/src/*.h firmware/prj.conf 
 			UF2=$$(find /build -name "zephyr.uf2" | head -1) && \
 			[ -n "$$UF2" ] || { echo "ERROR: zephyr.uf2 not found after build"; exit 1; } && \
 			cp "$$UF2" /build/zephyr.uf2 && \
-			chown -R $$HOST_UID:$$HOST_GID /build \
+			if [ "$$(stat -c %u /build)" != "0" ]; then \
+				chown -R $$HOST_UID:$$HOST_GID /build; \
+			fi \
 		'
 	@echo "✓ Firmware built: $(FW_BUILD_DIR)/zephyr.uf2"
 
@@ -89,14 +91,16 @@ $(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml middleware
 	@echo "  Image:   $(RUST_IMAGE)"
 	@echo "  Version: $(VERSION)"
 	@echo "══════════════════════════════════════════════════════════════"
-	@mkdir -p $(MW_BUILD_DIR) $(BUILD_DIR)/cargo-cache
+	@mkdir -p $(MW_BUILD_DIR) $(BUILD_DIR)/cargo-cache $(BUILD_DIR)/cargo-target
 	$(CONTAINER) run --rm \
 		-e HOST_UID=$(shell id -u) \
 		-e HOST_GID=$(shell id -g) \
 		-e FANCYPANTS_VERSION=$(VERSION) \
+		-e CARGO_TARGET_DIR=/workdir/cargo-target \
 		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
 		-v $(MW_BUILD_DIR):/workdir/output \
 		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-v $(BUILD_DIR)/cargo-target:/workdir/cargo-target \
 		-w /workdir \
 		$(RUST_IMAGE) \
 		sh -c '\
@@ -105,8 +109,10 @@ $(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml middleware
 			apt-get update -qq && \
 			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev >/dev/null 2>&1 && \
 			FANCYPANTS_VERSION=$$FANCYPANTS_VERSION cargo build --release 2>&1 && \
-			cp target/release/fancypants /workdir/output/fancypants && \
-			chown $$HOST_UID:$$HOST_GID /workdir/output/fancypants \
+			cp $$CARGO_TARGET_DIR/release/fancypants /workdir/output/fancypants && \
+			if [ "$$(stat -c %u /workdir/output)" != "0" ]; then \
+				chown $$HOST_UID:$$HOST_GID /workdir/output/fancypants; \
+			fi \
 		'
 	@echo ""
 	@echo "✓ Middleware built: $(MW_BUILD_DIR)/fancypants"
@@ -118,10 +124,12 @@ lint-middleware:
 	@echo "══════════════════════════════════════════════════════════════"
 	@echo "  Linting middleware (fmt + clippy)"
 	@echo "══════════════════════════════════════════════════════════════"
-	@mkdir -p $(BUILD_DIR)/cargo-cache
+	@mkdir -p $(BUILD_DIR)/cargo-cache $(BUILD_DIR)/cargo-target
 	$(CONTAINER) run --rm \
+		-e CARGO_TARGET_DIR=/workdir/cargo-target \
 		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
 		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-v $(BUILD_DIR)/cargo-target:/workdir/cargo-target \
 		-w /workdir \
 		$(RUST_IMAGE) \
 		sh -c '\
@@ -155,10 +163,12 @@ test-middleware:
 	@echo "══════════════════════════════════════════════════════════════"
 	@echo "  Testing middleware"
 	@echo "══════════════════════════════════════════════════════════════"
-	@mkdir -p $(BUILD_DIR)/cargo-cache
+	@mkdir -p $(BUILD_DIR)/cargo-cache $(BUILD_DIR)/cargo-target
 	$(CONTAINER) run --rm \
+		-e CARGO_TARGET_DIR=/workdir/cargo-target \
 		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
 		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-v $(BUILD_DIR)/cargo-target:/workdir/cargo-target \
 		-w /workdir \
 		$(RUST_IMAGE) \
 		sh -c '\
@@ -174,12 +184,14 @@ coverage:
 	@echo "══════════════════════════════════════════════════════════════"
 	@echo "  Middleware coverage (llvm-cov)"
 	@echo "══════════════════════════════════════════════════════════════"
-	@mkdir -p $(BUILD_DIR)/coverage $(BUILD_DIR)/cargo-cache
+	@mkdir -p $(BUILD_DIR)/coverage $(BUILD_DIR)/cargo-cache $(BUILD_DIR)/cargo-target
 	$(CONTAINER) run --rm \
 		-e HOST_UID=$(shell id -u) \
 		-e HOST_GID=$(shell id -g) \
+		-e CARGO_TARGET_DIR=/workdir/cargo-target \
 		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
 		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-v $(BUILD_DIR)/cargo-target:/workdir/cargo-target \
 		-v $(BUILD_DIR)/coverage:/workdir/coverage-out \
 		-w /workdir \
 		$(RUST_IMAGE) \
@@ -194,10 +206,12 @@ coverage:
 				--html --output-dir /workdir/coverage-out \
 				--fail-under-lines 80 \
 				2>&1 && \
-			chown -R $$HOST_UID:$$HOST_GID /workdir/coverage-out \
+			if [ "$$(stat -c %u /workdir/coverage-out)" != "0" ]; then \
+				chown -R $$HOST_UID:$$HOST_GID /workdir/coverage-out; \
+			fi \
 		'
 	@echo ""
-	@echo "✓ Coverage report: $(BUILD_DIR)/coverage/index.html"
+	@echo "✓ Coverage report: $(BUILD_DIR)/coverage/html/index.html"
 
 # ── Format (establish baseline) ────────────────────────────────────────
 format-middleware:

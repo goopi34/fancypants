@@ -1,4 +1,4 @@
-// Belt-mounted wearable enclosure system for VL53L0X sensor + Feather 32u4
+// Belt-mounted wearable enclosure system for VL53L0X sensor + Feather nRF52840
 // Two-part design: Front sensor enclosure + Hip controller enclosure
 // Optimized for resin (DLP) printing
 

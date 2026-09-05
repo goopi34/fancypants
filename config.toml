@@ -8,11 +8,25 @@ device_name = "Fancypants"
 scan_timeout_secs = 30
 # Delay before reconnecting after disconnect (seconds)
 reconnect_delay_secs = 5
+# Failsafe: stop the toy and reconnect if no range data arrives
+# for this long (seconds, 0 = disabled)
+data_timeout_secs = 5
 
 [mapping]
+# What drives the intensity:
+#   "distance" = intensity follows the current distance reading (default)
+#   "velocity" = intensity follows how fast the distance is changing;
+#                movement in either direction counts, holding still = off
+mode = "distance"
+
+# Distance mode only:
 # true = closer to sensor means more intense (default, most intuitive)
 # false = further from sensor means more intense
 invert = true
+
+# Velocity mode only: speed (mm/s) that maps to max intensity.
+# Slow hand waving is ~100-300mm/s, fast is ~1000mm/s.
+max_speed_mm_s = 500.0
 
 # Sensor range window (millimeters)
 # VL53L0X effective range is ~30-1200mm
@@ -41,5 +55,18 @@ server_address = "ws://127.0.0.1:12345"
 # Device index to control (comment out to use first available)
 # device_index = 0
 
-# Actuator types to target
+# Actuator types to target. Each entry is either just a type name:
+#   actuator_types = ["Vibrate"]
+# or a table with per-actuator settings:
+#   actuator_types = [
+#       { type = "Vibrate", max_intensity = 0.8 },
+#       { type = "Oscillate", pattern = "pulse", pulse_hz = 2.0 },
+#   ]
+# Types: Vibrate, Rotate, Oscillate, Constrict, Inflate, Position
+# min_intensity / max_intensity (0.0-1.0) rescale the mapped intensity for
+# that actuator (at mapped intensity 0 the actuator is off).
+# pattern is "constant" (follow the sensor, default) or "pulse"
+# (on/off square wave at pulse_hz while active).
+# If a toy has several actuators of the same type, the nth entry of that type
+# configures its nth actuator; extras reuse the last entry.
 actuator_types = ["Vibrate"]
