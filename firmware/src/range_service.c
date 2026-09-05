@@ -21,6 +21,9 @@ static struct range_config active_config = {
 /* Track CCC subscription state */
 static bool range_notify_enabled;
 
+/* Uptime of the last notification sent, for notify_interval_ms rate limiting */
+static int64_t last_notify_uptime_ms;
+
 /* CCC changed callback */
 static void range_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
@@ -111,6 +114,13 @@ int range_service_update(uint16_t distance_mm)
 	if (!range_notify_enabled) {
 		return 0;
 	}
+
+	/* Rate-limit notifications independently of the sampling rate */
+	int64_t now = k_uptime_get();
+	if (now - last_notify_uptime_ms < active_config.notify_interval_ms) {
+		return 0;
+	}
+	last_notify_uptime_ms = now;
 
 	return bt_gatt_notify(NULL, &range_svc.attrs[1], &current_range_mm,
 			      sizeof(current_range_mm));

@@ -1,4 +1,11 @@
-# Rangefinder BLE Configuration
+# Fancypants nRF52 Configuration
+
+config APP_VERSION_STRING
+	string "Application version string"
+	default "dev"
+	help
+	  Version reported in the boot log. The containerized build sets
+	  this from git describe.
 
 config RANGE_SAMPLE_INTERVAL_MS
 	int "Range sensor sampling interval in milliseconds"

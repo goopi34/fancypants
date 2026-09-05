@@ -2,63 +2,49 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
+
+permissions:
+  contents: write
 
 jobs:
-  build:
-    name: Build
+  release:
+    name: Build & Release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract version
-        id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Build all
-        run: make all VERSION=${{ steps.version.outputs.version }}
+      - name: Run tests
+        run: make test
 
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-uf2
-          path: build/firmware/zephyr.uf2
-          if-no-files-found: error
+      - name: Build firmware
+        run: make firmware VERSION="$VERSION"
 
-      - name: Upload middleware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: middleware-linux-x86_64
-          path: build/middleware/fancypants
-          if-no-files-found: error
+      - name: Build middleware
+        run: make middleware VERSION="$VERSION"
 
-  release:
-    name: Release
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download firmware
-        uses: actions/download-artifact@v4
-        with:
-          name: firmware-uf2
-
-      - name: Download middleware
-        uses: actions/download-artifact@v4
-        with:
-          name: middleware-linux-x86_64
-
-      - name: Rename artifacts
+      - name: Package artifacts
         run: |
-          mv zephyr.uf2 fancypants-${{ github.ref_name }}-firmware.uf2
-          mv fancypants fancypants-${{ github.ref_name }}-linux-x86_64
-          chmod +x fancypants-${{ github.ref_name }}-linux-x86_64
+          mkdir -p dist
+          # Firmware: a bare UF2, ready to drag onto the FTHR840BOOT drive
+          cp build/firmware/zephyr.uf2 "dist/fancypants-nrf52-${VERSION}.uf2"
+          # Middleware: binary + documented sample config, so extracting the
+          # tarball and running ./fancypants just works
+          staging="fancypants-${VERSION}-linux-x86_64"
+          mkdir "dist/$staging"
+          cp build/middleware/fancypants "dist/$staging/"
+          cp config.toml README.md LICENSE "dist/$staging/"
+          cp -r docs "dist/$staging/docs"
+          tar -C dist -czf "dist/$staging.tar.gz" "$staging"
+          rm -r "dist/$staging"
 
-      - name: Create GitHub Release
+      - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            fancypants-${{ github.ref_name }}-firmware.uf2
-            fancypants-${{ github.ref_name }}-linux-x86_64
+            dist/*.uf2
+            dist/*.tar.gz
           generate_release_notes: true

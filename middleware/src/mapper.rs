@@ -1,10 +1,12 @@
-use crate::config::MappingConfig;
+use crate::config::{MappingConfig, MappingMode};
+use std::time::Instant;
 
 /// Maps raw distance readings to intensity values for Buttplug devices.
 pub struct RangeMapper {
     config: MappingConfig,
     smoothed_intensity: f64,
     initialized: bool,
+    last_sample: Option<(Instant, u16)>,
 }
 
 impl RangeMapper {
@@ -13,39 +15,32 @@ impl RangeMapper {
             config,
             smoothed_intensity: 0.0,
             initialized: false,
+            last_sample: None,
         }
     }
 
     /// Map a distance_mm reading to an intensity 0.0-1.0.
     ///
-    /// With invert=true (default): closer = higher intensity
-    /// With invert=false: further = higher intensity
+    /// In distance mode with invert=true (default): closer = higher intensity;
+    /// with invert=false: further = higher intensity.
+    /// In velocity mode: faster movement (either direction) = higher intensity.
     ///
     /// Applies exponential moving average smoothing.
     pub fn map(&mut self, distance_mm: u16) -> f64 {
+        self.map_at(distance_mm, Instant::now())
+    }
+
+    fn map_at(&mut self, distance_mm: u16, now: Instant) -> f64 {
+        let last_sample = self.last_sample.replace((now, distance_mm));
+
         // Dead zone check
         if self.config.deadzone_mm > 0 && distance_mm > self.config.deadzone_mm {
             return self.apply_smoothing(0.0);
         }
 
-        // Clamp to configured range
-        let clamped = distance_mm
-            .max(self.config.min_range_mm)
-            .min(self.config.max_range_mm);
-
-        // Normalize to 0.0 - 1.0
-        let range_span = (self.config.max_range_mm - self.config.min_range_mm) as f64;
-        let normalized = if range_span > 0.0 {
-            (clamped - self.config.min_range_mm) as f64 / range_span
-        } else {
-            0.0
-        };
-
-        // Invert if needed (closer = higher)
-        let directed = if self.config.invert {
-            1.0 - normalized
-        } else {
-            normalized
+        let directed = match self.config.mode {
+            MappingMode::Distance => self.normalized_distance(distance_mm),
+            MappingMode::Velocity => self.normalized_speed(distance_mm, now, last_sample),
         };
 
         // Scale to intensity range
@@ -53,6 +48,46 @@ impl RangeMapper {
         let raw_intensity = self.config.min_intensity + (directed * intensity_span);
 
         self.apply_smoothing(raw_intensity.clamp(0.0, 1.0))
+    }
+
+    /// Normalize a reading to 0.0-1.0 within the configured range window,
+    /// honoring `invert`.
+    fn normalized_distance(&self, distance_mm: u16) -> f64 {
+        let clamped = distance_mm
+            .max(self.config.min_range_mm)
+            .min(self.config.max_range_mm);
+
+        let range_span = (self.config.max_range_mm - self.config.min_range_mm) as f64;
+        let normalized = if range_span > 0.0 {
+            (clamped - self.config.min_range_mm) as f64 / range_span
+        } else {
+            0.0
+        };
+
+        if self.config.invert {
+            1.0 - normalized
+        } else {
+            normalized
+        }
+    }
+
+    /// Normalize the speed of range change to 0.0-1.0, where
+    /// `max_speed_mm_s` and above maps to 1.0. Direction is ignored.
+    fn normalized_speed(
+        &self,
+        distance_mm: u16,
+        now: Instant,
+        last_sample: Option<(Instant, u16)>,
+    ) -> f64 {
+        let Some((last_time, last_distance)) = last_sample else {
+            return 0.0;
+        };
+        let dt = now.duration_since(last_time).as_secs_f64();
+        if dt <= 0.0 {
+            return 0.0;
+        }
+        let speed = (distance_mm as f64 - last_distance as f64).abs() / dt;
+        (speed / self.config.max_speed_mm_s).clamp(0.0, 1.0)
     }
 
     fn apply_smoothing(&mut self, raw: f64) -> f64 {
@@ -79,7 +114,9 @@ mod tests {
 
     fn default_config() -> MappingConfig {
         MappingConfig {
+            mode: MappingMode::Distance,
             invert: true,
+            max_speed_mm_s: 500.0,
             min_range_mm: 30,
             max_range_mm: 300,
             min_intensity: 0.0,
@@ -278,6 +315,164 @@ mod tests {
         assert!(
             (intensity - 0.0).abs() < 0.01,
             "clamped to max_range (inverted) should be ~0.0, got {intensity}"
+        );
+    }
+
+    fn velocity_config() -> MappingConfig {
+        let mut cfg = default_config();
+        cfg.mode = MappingMode::Velocity;
+        cfg.max_speed_mm_s = 500.0;
+        cfg.deadzone_mm = 0;
+        cfg
+    }
+
+    /// Feed `distances` at fixed `step` intervals and return the last intensity.
+    fn feed_at_intervals(
+        mapper: &mut RangeMapper,
+        distances: &[u16],
+        step: std::time::Duration,
+    ) -> f64 {
+        let start = Instant::now();
+        let mut last = 0.0;
+        for (i, &d) in distances.iter().enumerate() {
+            last = mapper.map_at(d, start + step * i as u32);
+        }
+        last
+    }
+
+    #[test]
+    fn test_velocity_first_sample_is_zero() {
+        let mut mapper = RangeMapper::new(velocity_config());
+        let intensity = mapper.map_at(100, Instant::now());
+        assert!(
+            (intensity - 0.0).abs() < 0.01,
+            "first sample has no velocity, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_velocity_still_hand_is_zero() {
+        let mut mapper = RangeMapper::new(velocity_config());
+        let intensity = feed_at_intervals(
+            &mut mapper,
+            &[150, 150, 150, 150],
+            std::time::Duration::from_millis(50),
+        );
+        assert!(
+            (intensity - 0.0).abs() < 0.01,
+            "no movement should be 0.0, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_velocity_max_speed_is_full_intensity() {
+        let mut mapper = RangeMapper::new(velocity_config());
+        // 25mm per 50ms = 500mm/s = max_speed_mm_s
+        let intensity = feed_at_intervals(
+            &mut mapper,
+            &[100, 125],
+            std::time::Duration::from_millis(50),
+        );
+        assert!(
+            (intensity - 1.0).abs() < 0.01,
+            "moving at max_speed should be ~1.0, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_velocity_half_speed_is_half_intensity() {
+        let mut mapper = RangeMapper::new(velocity_config());
+        // 12.5mm per 50ms = 250mm/s = half of max_speed_mm_s (round to 13mm)
+        let intensity = feed_at_intervals(
+            &mut mapper,
+            &[100, 113],
+            std::time::Duration::from_millis(50),
+        );
+        assert!(
+            intensity > 0.4 && intensity < 0.6,
+            "half speed should be ~0.5, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_velocity_clamps_above_max_speed() {
+        let mut mapper = RangeMapper::new(velocity_config());
+        // 200mm per 50ms = 4000mm/s, way above max
+        let intensity = feed_at_intervals(
+            &mut mapper,
+            &[100, 300],
+            std::time::Duration::from_millis(50),
+        );
+        assert!(
+            (intensity - 1.0).abs() < 0.01,
+            "above max_speed should clamp to 1.0, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_velocity_direction_agnostic() {
+        let step = std::time::Duration::from_millis(50);
+        let mut toward = RangeMapper::new(velocity_config());
+        let mut away = RangeMapper::new(velocity_config());
+        let a = feed_at_intervals(&mut toward, &[200, 187], step);
+        let b = feed_at_intervals(&mut away, &[187, 200], step);
+        assert!(
+            (a - b).abs() < 0.01,
+            "moving closer ({a}) and away ({b}) should map the same"
+        );
+    }
+
+    #[test]
+    fn test_velocity_respects_deadzone() {
+        let mut cfg = velocity_config();
+        cfg.deadzone_mm = 500;
+        let mut mapper = RangeMapper::new(cfg);
+        // Fast movement, but entirely beyond the deadzone
+        let intensity = feed_at_intervals(
+            &mut mapper,
+            &[600, 700, 800],
+            std::time::Duration::from_millis(50),
+        );
+        assert!(
+            (intensity - 0.0).abs() < 0.01,
+            "movement beyond deadzone should be 0.0, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_velocity_zero_dt_is_zero() {
+        let mut mapper = RangeMapper::new(velocity_config());
+        let t = Instant::now();
+        mapper.map_at(100, t);
+        let intensity = mapper.map_at(300, t);
+        assert!(
+            (intensity - 0.0).abs() < 0.01,
+            "zero dt should not divide by zero, got {intensity}"
+        );
+    }
+
+    #[test]
+    fn test_velocity_scales_to_intensity_range() {
+        let mut cfg = velocity_config();
+        cfg.min_intensity = 0.2;
+        cfg.max_intensity = 0.8;
+        let mut mapper = RangeMapper::new(cfg);
+        let step = std::time::Duration::from_millis(50);
+        let still = feed_at_intervals(&mut mapper, &[100, 100], step);
+        assert!(
+            (still - 0.2).abs() < 0.01,
+            "still should be min_intensity 0.2, got {still}"
+        );
+        let mut mapper = RangeMapper::new({
+            let mut cfg = velocity_config();
+            cfg.min_intensity = 0.2;
+            cfg.max_intensity = 0.8;
+            cfg
+        });
+        let fast = feed_at_intervals(&mut mapper, &[100, 300], step);
+        assert!(
+            (fast - 0.8).abs() < 0.01,
+            "max speed should be max_intensity 0.8, got {fast}"
         );
     }
 

@@ -23,4 +23,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: build/coverage/index.html
+          path: build/coverage/html/
+          if-no-files-found: error

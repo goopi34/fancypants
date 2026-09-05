@@ -59,7 +59,7 @@ The Feather is powered by an Adafruit 500mAh 3.7V LiPo battery
 - The battery and Feather are compact enough to share a single
   belt pouch
 - The Feather's onboard charger handles recharging — just plug
-  USB-C into the Feather. The yellow CHG LED lights during charge,
+  USB into the Feather. The yellow CHG LED lights during charge,
   goes off when complete. Charge time is ~5 hours from dead.
 - When USB is connected, the Feather hot-swaps to USB power and
   charges the LiPo simultaneously

@@ -1,5 +1,5 @@
 /*
- * Rangefinder BLE Peripheral
+ * Fancypants nRF52 BLE Peripheral
  *
  * Reads distance from a VL53L0X time-of-flight sensor via I2C and
  * broadcasts it over BLE using a custom GATT service. Also reports
@@ -168,7 +168,7 @@ int main(void)
 {
 	int err;
 
-	LOG_INF("Rangefinder BLE starting...");
+	LOG_INF("Fancypants nRF52 %s starting...", CONFIG_APP_VERSION_STRING);
 
 	/* Get VL53L0X device */
 	range_sensor = DEVICE_DT_GET_ONE(st_vl53l0x);
@@ -216,7 +216,7 @@ int main(void)
 			battery_thread_fn, NULL, NULL, NULL, K_PRIO_PREEMPT(10), 0, K_NO_WAIT);
 	k_thread_name_set(&battery_thread, "battery");
 
-	LOG_INF("Rangefinder BLE running");
+	LOG_INF("Fancypants nRF52 running");
 
 	return 0;
 }
