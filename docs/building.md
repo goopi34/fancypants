@@ -72,6 +72,12 @@ runs the tests, builds both components, and publishes a GitHub Release with:
   `FTHR840BOOT` drive
 - `fancypants-<version>-linux-x86_64.tar.gz` — Linux CLI + Tauri v2 GUI
   application, sample `config.toml`, and docs
+- `fancypants-<version>-linux-amd64.deb` — Debian/Ubuntu package for the
+  Tauri v2 GUI application
+- `fancypants-<version>-linux-x86_64.rpm` — Fedora/RHEL/openSUSE RPM package
+  for the Tauri v2 GUI application
+- `fancypants-<version>-linux-x86_64.AppImage` — Portable Linux AppImage for
+  the Tauri v2 GUI application
 - `fancypants-<version>-windows-x86_64.zip` — Windows CLI + Tauri v2 GUI
   application, sample `config.toml`, and docs
 - `fancypants-<version>-android-arm64.apk` — sideloadable Android APK
