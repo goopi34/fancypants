@@ -26,9 +26,21 @@
 	};
 };
 
-/* Enable ADC for battery voltage reading on P0.29 (VBAT/2 divider) */
+/* Enable ADC for battery voltage reading on P0.29 (VBAT/2 divider) and
+ * route console output to USB CDC ACM (/dev/ttyACM0)
+ */
 / {
+	chosen {
+		zephyr,console = &cdc_acm_uart0;
+	};
+
 	zephyr,user {
 		io-channels = <&adc 5>;
+	};
+};
+
+&zephyr_udc0 {
+	cdc_acm_uart0: cdc_acm_uart0 {
+		compatible = "zephyr,cdc-acm-uart";
 	};
 };

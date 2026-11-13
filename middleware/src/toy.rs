@@ -1,4 +1,5 @@
-use crate::config::{ActuatorConfig, Pattern};
+use crate::config::{ActuatorConfig, Pattern, ResolvedDeviceTarget};
+use crate::mapper::RangeMapper;
 use buttplug::client::{device::ScalarCommand, ButtplugClient, ButtplugClientDevice};
 use buttplug::core::connector::new_json_ws_client_connector;
 use buttplug::core::message::ActuatorType;
@@ -11,6 +12,18 @@ use tracing::{debug, info, warn};
 #[async_trait::async_trait]
 pub trait ToyBackend: Send {
     async fn set_intensity(&mut self, intensity: f64) -> anyhow::Result<()>;
+    /// Feed a raw range reading in mm, allowing multi-device controllers with
+    /// per-device mappers to map and apply intensities independently.
+    /// Returns `Ok(true)` if the backend mapped the range itself, or `Ok(false)`
+    /// if the caller should map with the default `RangeMapper` and call `set_intensity`.
+    async fn update_range(&mut self, _distance_mm: u16) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    /// Re-evaluate time-varying patterns (e.g. `Pattern::Pulse`) at the last
+    /// set intensity.
+    async fn tick(&mut self) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn stop(&mut self) -> anyhow::Result<()>;
     async fn disconnect(&self) -> anyhow::Result<()>;
     fn is_connected(&self) -> bool;
@@ -139,6 +152,7 @@ pub(crate) fn plan_actuators(
 pub(crate) struct ToyState<D: DeviceHandle> {
     device: Option<D>,
     actuators: Vec<PlannedActuator>,
+    last_intensity: f64,
     last_values: Vec<f64>,
     connected: bool,
     started_at: Instant,
@@ -149,6 +163,7 @@ impl<D: DeviceHandle> ToyState<D> {
         ToyState {
             device: None,
             actuators: Vec::new(),
+            last_intensity: 0.0,
             last_values: Vec::new(),
             connected,
             started_at: Instant::now(),
@@ -162,6 +177,12 @@ impl<D: DeviceHandle> ToyState<D> {
     fn set_actuators(&mut self, actuators: Vec<PlannedActuator>) {
         self.last_values = vec![0.0; actuators.len()];
         self.actuators = actuators;
+    }
+
+    fn has_pulse_actuator(&self) -> bool {
+        self.actuators
+            .iter()
+            .any(|a| a.config.pattern == Pattern::Pulse)
     }
 }
 
@@ -177,6 +198,7 @@ impl<D: DeviceHandle + Sync> ToyBackend for ToyState<D> {
         }
 
         let clamped = intensity.clamp(0.0, 1.0);
+        self.last_intensity = clamped;
         let elapsed = self.started_at.elapsed().as_secs_f64();
         let values: Vec<f64> = self
             .actuators
@@ -200,9 +222,18 @@ impl<D: DeviceHandle + Sync> ToyBackend for ToyState<D> {
         Ok(())
     }
 
+    async fn tick(&mut self) -> anyhow::Result<()> {
+        if self.last_intensity > 0.0 && self.has_pulse_actuator() {
+            self.set_intensity(self.last_intensity).await
+        } else {
+            Ok(())
+        }
+    }
+
     async fn stop(&mut self) -> anyhow::Result<()> {
         if let Some(device) = &self.device {
             device.stop().await?;
+            self.last_intensity = 0.0;
             self.last_values.fill(0.0);
         }
         Ok(())
@@ -218,10 +249,106 @@ impl<D: DeviceHandle + Sync> ToyBackend for ToyState<D> {
     }
 }
 
-/// Wrapper around Buttplug client for device control
+/// Summary of a discovered Buttplug device for pure matching logic.
+#[derive(Debug, Clone)]
+pub(crate) struct DiscoveredDeviceInfo {
+    pub index: u32,
+    pub name: String,
+    pub scalar_types: Vec<ActuatorType>,
+}
+
+/// Match a single target specification to an available device index from `devices`,
+/// avoiding `claimed_indices` when auto-selecting (unless `device_index` or
+/// `device_name` explicitly targets a device).
+pub(crate) fn select_device_for_target(
+    devices: &[DiscoveredDeviceInfo],
+    target_index: Option<u32>,
+    target_name: Option<&str>,
+    configured: &[ResolvedActuator],
+    claimed_indices: &[u32],
+) -> anyhow::Result<usize> {
+    if let Some(idx) = target_index {
+        let pos = devices
+            .iter()
+            .position(|d| d.index == idx)
+            .ok_or_else(|| anyhow::anyhow!("Device index {} not found", idx))?;
+        if let Some(name_sub) = target_name {
+            let needle = name_sub.to_ascii_lowercase();
+            if !devices[pos].name.to_ascii_lowercase().contains(&needle) {
+                anyhow::bail!(
+                    "Device at index {} is {:?}, which does not match device_name {:?}",
+                    idx,
+                    devices[pos].name,
+                    name_sub
+                );
+            }
+        }
+        return Ok(pos);
+    }
+
+    if let Some(name_sub) = target_name {
+        let needle = name_sub.to_ascii_lowercase();
+        // Prefer unclaimed device matching name, fall back to any device matching name
+        if let Some(pos) = devices.iter().position(|d| {
+            !claimed_indices.contains(&d.index) && d.name.to_ascii_lowercase().contains(&needle)
+        }) {
+            return Ok(pos);
+        }
+        if let Some(pos) = devices
+            .iter()
+            .position(|d| d.name.to_ascii_lowercase().contains(&needle))
+        {
+            return Ok(pos);
+        }
+        anyhow::bail!("No Buttplug device matching name {:?} found", name_sub);
+    }
+
+    // Auto-select: first unclaimed device with at least one configured actuator type
+    if let Some(pos) = devices.iter().position(|d| {
+        !claimed_indices.contains(&d.index)
+            && d.scalar_types
+                .iter()
+                .any(|t| configured.iter().any(|c| c.actuator_type == *t))
+    }) {
+        return Ok(pos);
+    }
+
+    // Fallback: first unclaimed device
+    if let Some(pos) = devices
+        .iter()
+        .position(|d| !claimed_indices.contains(&d.index))
+    {
+        warn!("No unclaimed device matches the configured actuator types, using first unclaimed device");
+        return Ok(pos);
+    }
+
+    anyhow::bail!("No suitable unclaimed Buttplug device found")
+}
+
+/// One active toy slot with its own `ToyState` and `RangeMapper`.
+pub(crate) struct ManagedToy<D: DeviceHandle> {
+    pub state: ToyState<D>,
+    pub mapper: RangeMapper,
+}
+
+impl<D: DeviceHandle + Sync> ManagedToy<D> {
+    pub fn new(device: D, actuators: Vec<PlannedActuator>, mapper: RangeMapper) -> Self {
+        let mut state = ToyState::new(true);
+        state.set_device(device);
+        state.set_actuators(actuators);
+        ManagedToy { state, mapper }
+    }
+
+    pub async fn update_range(&mut self, distance_mm: u16) -> anyhow::Result<()> {
+        let intensity = self.mapper.map(distance_mm);
+        self.state.set_intensity(intensity).await
+    }
+}
+
+/// Wrapper around Buttplug client for controlling one or more toys independently.
 pub struct ToyController {
     client: ButtplugClient,
-    state: ToyState<ButtplugDeviceHandle>,
+    toys: Vec<ManagedToy<ButtplugDeviceHandle>>,
 }
 
 impl ToyController {
@@ -233,20 +360,14 @@ impl ToyController {
         info!("Connected to Intiface Engine at {}", server_address);
 
         Ok(ToyController {
-            state: ToyState::new(true),
             client,
+            toys: Vec::new(),
         })
     }
 
-    /// Scan for and select a target device, planning which of its actuators
-    /// to drive based on the configured actuator types.
-    pub async fn find_device(
-        &mut self,
-        device_index: Option<u32>,
-        actuator_types: &[ActuatorConfig],
-    ) -> anyhow::Result<()> {
-        let configured = resolve_actuators(actuator_types)?;
-
+    /// Scan for and configure all target devices, each with its own actuator plan
+    /// and `RangeMapper`.
+    pub async fn find_devices(&mut self, targets: &[ResolvedDeviceTarget]) -> anyhow::Result<()> {
         info!("Scanning for Buttplug devices...");
         self.client.start_scanning().await?;
 
@@ -261,56 +382,68 @@ impl ToyController {
             );
         }
 
-        let device = if let Some(idx) = device_index {
-            devices
-                .iter()
-                .find(|d| d.index() == idx)
-                .ok_or_else(|| anyhow::anyhow!("Device index {} not found", idx))?
-                .clone()
-        } else {
-            // Use first device with at least one configured actuator type
-            devices
-                .iter()
-                .find(|d| {
-                    scalar_types(d)
+        let infos: Vec<DiscoveredDeviceInfo> = devices
+            .iter()
+            .map(|d| DiscoveredDeviceInfo {
+                index: d.index(),
+                name: d.name().to_string(),
+                scalar_types: scalar_types(d),
+            })
+            .collect();
+
+        let mut claimed_indices = Vec::new();
+        let mut managed = Vec::with_capacity(targets.len());
+
+        for target in targets {
+            let configured = resolve_actuators(&target.actuator_types)?;
+            let pos = select_device_for_target(
+                &infos,
+                target.device_index,
+                target.device_name.as_deref(),
+                &configured,
+                &claimed_indices,
+            )?;
+            let device = devices[pos].clone();
+            let device_types = &infos[pos].scalar_types;
+            let plan = plan_actuators(device_types, &configured);
+            if plan.is_empty() {
+                anyhow::bail!(
+                    "Device {} has no configured actuator types (configured: {:?}, device has: {:?})",
+                    device.name(),
+                    configured
                         .iter()
-                        .any(|t| configured.iter().any(|c| c.actuator_type == *t))
-                })
-                .or_else(|| {
-                    warn!("No device matches the configured actuator types, using first device");
-                    devices.first()
-                })
-                .ok_or_else(|| anyhow::anyhow!("No suitable device found"))?
-                .clone()
-        };
+                        .map(|c| c.actuator_type)
+                        .collect::<Vec<_>>(),
+                    device_types,
+                );
+            }
 
-        let device_types = scalar_types(&device);
-        let plan = plan_actuators(&device_types, &configured);
-        if plan.is_empty() {
-            anyhow::bail!(
-                "Device {} has no configured actuator types (configured: {:?}, device has: {:?})",
-                device.name(),
-                configured
-                    .iter()
-                    .map(|c| c.actuator_type)
-                    .collect::<Vec<_>>(),
-                device_types,
-            );
-        }
-
-        info!("Using device: {} (index {})", device.name(), device.index());
-        for actuator in &plan {
             info!(
-                "  actuator {} ({:?}): intensity [{}-{}], pattern={}",
-                actuator.index,
-                actuator.config.actuator_type,
-                actuator.config.min_intensity,
-                actuator.config.max_intensity,
-                actuator.config.pattern,
+                "Using device: {} (index {}, mode={})",
+                device.name(),
+                device.index(),
+                target.mapping.mode
             );
+            for actuator in &plan {
+                info!(
+                    "  actuator {} ({:?}): intensity [{}-{}], pattern={}",
+                    actuator.index,
+                    actuator.config.actuator_type,
+                    actuator.config.min_intensity,
+                    actuator.config.max_intensity,
+                    actuator.config.pattern,
+                );
+            }
+
+            claimed_indices.push(device.index());
+            managed.push(ManagedToy::new(
+                ButtplugDeviceHandle(device),
+                plan,
+                RangeMapper::new(target.mapping.clone()),
+            ));
         }
-        self.state.set_device(ButtplugDeviceHandle(device));
-        self.state.set_actuators(plan);
+
+        self.toys = managed;
         Ok(())
     }
 }
@@ -328,11 +461,63 @@ fn scalar_types(device: &ButtplugClientDevice) -> Vec<ActuatorType> {
 #[async_trait::async_trait]
 impl ToyBackend for ToyController {
     async fn set_intensity(&mut self, intensity: f64) -> anyhow::Result<()> {
-        self.state.set_intensity(intensity).await
+        let mut first_err = None;
+        for toy in &mut self.toys {
+            if let Err(e) = toy.state.set_intensity(intensity).await {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    async fn update_range(&mut self, distance_mm: u16) -> anyhow::Result<bool> {
+        let mut first_err = None;
+        for toy in &mut self.toys {
+            if let Err(e) = toy.update_range(distance_mm).await {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(true),
+        }
+    }
+
+    async fn tick(&mut self) -> anyhow::Result<()> {
+        let mut first_err = None;
+        for toy in &mut self.toys {
+            if let Err(e) = toy.state.tick().await {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
-        self.state.stop().await
+        let mut first_err = None;
+        for toy in &mut self.toys {
+            if let Err(e) = toy.state.stop().await {
+                if first_err.is_none() {
+                    first_err = Some(e);
+                }
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
     }
 
     async fn disconnect(&self) -> anyhow::Result<()> {
@@ -713,6 +898,144 @@ mod tests {
     fn test_values_changed_any_element() {
         assert!(!values_changed(&[0.5, 0.5], &[0.5, 0.505]));
         assert!(values_changed(&[0.5, 0.6], &[0.5, 0.5]));
+    }
+
+    #[tokio::test]
+    async fn test_tick_drives_pulse_actuator_when_active() {
+        let device = MockDevice::new();
+        let commands = device.commands.clone();
+        let mut state: ToyState<MockDevice> = ToyState::new(true);
+        state.set_device(device);
+        state.set_actuators(vec![planned(
+            0,
+            ResolvedActuator {
+                actuator_type: ActuatorType::Vibrate,
+                min_intensity: 0.0,
+                max_intensity: 1.0,
+                pattern: Pattern::Pulse,
+                pulse_hz: 10.0, // 100ms period: 50ms on, 50ms off
+            },
+        )]);
+
+        // Tick when intensity is 0 does nothing
+        state.tick().await.unwrap();
+        assert_eq!(commands.lock().unwrap().len(), 0);
+
+        // Set non-zero intensity, then tick across half-periods
+        state.set_intensity(0.8).await.unwrap();
+        for _ in 0..6 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            state.tick().await.unwrap();
+        }
+
+        let cmds = commands.lock().unwrap();
+        assert!(
+            cmds.len() >= 2,
+            "pulse tick should toggle output over time, got {} commands",
+            cmds.len()
+        );
+    }
+
+    #[test]
+    fn test_select_device_for_target_by_index_and_name_and_auto() {
+        let devices = vec![
+            DiscoveredDeviceInfo {
+                index: 0,
+                name: "Lovense Lush".to_string(),
+                scalar_types: vec![ActuatorType::Vibrate],
+            },
+            DiscoveredDeviceInfo {
+                index: 1,
+                name: "We-Vibe Melt".to_string(),
+                scalar_types: vec![ActuatorType::Oscillate],
+            },
+        ];
+        let vib = vec![resolved(ActuatorType::Vibrate)];
+        let osc = vec![resolved(ActuatorType::Oscillate)];
+
+        // Match by index
+        assert_eq!(
+            select_device_for_target(&devices, Some(1), None, &osc, &[]).unwrap(),
+            1
+        );
+        // Missing index errors
+        assert!(select_device_for_target(&devices, Some(99), None, &vib, &[]).is_err());
+        // Index + mismatched name errors
+        assert!(select_device_for_target(&devices, Some(0), Some("Melt"), &vib, &[]).is_err());
+
+        // Match by case-insensitive substring name
+        assert_eq!(
+            select_device_for_target(&devices, None, Some("melt"), &osc, &[]).unwrap(),
+            1
+        );
+        assert!(select_device_for_target(&devices, None, Some("Nonexistent"), &vib, &[]).is_err());
+
+        // Auto-select skips already claimed devices
+        let first = select_device_for_target(&devices, None, None, &vib, &[]).unwrap();
+        assert_eq!(first, 0);
+        let second =
+            select_device_for_target(&devices, None, None, &osc, &[devices[first].index]).unwrap();
+        assert_eq!(second, 1);
+
+        // When all devices are claimed, auto-select errors
+        assert!(select_device_for_target(&devices, None, None, &vib, &[0, 1]).is_err());
+    }
+
+    #[tokio::test]
+    async fn test_multiple_managed_toys_independent_modes() {
+        use crate::config::{MappingConfig, MappingMode};
+
+        let dev1 = MockDevice::new();
+        let cmds1 = dev1.commands.clone();
+        let dev2 = MockDevice::new();
+        let cmds2 = dev2.commands.clone();
+
+        // Toy 1: proximity (closer = more intense, invert = true)
+        let mut toy1 = ManagedToy::new(
+            dev1,
+            vec![planned(0, resolved(ActuatorType::Vibrate))],
+            RangeMapper::new(MappingConfig {
+                mode: MappingMode::Distance,
+                invert: true,
+                max_speed_mm_s: 500.0,
+                min_range_mm: 30,
+                max_range_mm: 300,
+                min_intensity: 0.0,
+                max_intensity: 1.0,
+                deadzone_mm: 500,
+                smoothing: 0.0,
+            }),
+        );
+
+        // Toy 2: proximity inverted false (further = more intense)
+        let mut toy2 = ManagedToy::new(
+            dev2,
+            vec![planned(0, resolved(ActuatorType::Oscillate))],
+            RangeMapper::new(MappingConfig {
+                mode: MappingMode::Distance,
+                invert: false,
+                max_speed_mm_s: 500.0,
+                min_range_mm: 30,
+                max_range_mm: 300,
+                min_intensity: 0.0,
+                max_intensity: 1.0,
+                deadzone_mm: 500,
+                smoothing: 0.0,
+            }),
+        );
+
+        // At 30mm (closest): toy1 is at 1.0, toy2 is at 0.0
+        toy1.update_range(30).await.unwrap();
+        toy2.update_range(30).await.unwrap();
+
+        // At 300mm (farthest): toy1 is at 0.0, toy2 is at 1.0
+        toy1.update_range(300).await.unwrap();
+        toy2.update_range(300).await.unwrap();
+
+        assert!((nth_value(&cmds1, 0) - 1.0).abs() < 0.01);
+        assert!((nth_value(&cmds1, 1) - 0.0).abs() < 0.01);
+        // Toy 2 stayed at 0.0 on first update (deduped), then went to 1.0 at 300mm
+        assert!((nth_value(&cmds2, 0) - 1.0).abs() < 0.01);
     }
 
     #[tokio::test]

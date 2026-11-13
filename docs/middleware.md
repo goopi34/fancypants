@@ -3,7 +3,7 @@
 ## Getting the binary
 
 Either download the `fancypants-<version>-linux-x86_64.tar.gz` tarball from
-the [Releases page](../../../releases) (binary + sample `config.toml`), or
+the [Releases page](../../releases) (binary + sample `config.toml`), or
 build from source (see [building.md](building.md)) — the binary then lands in
 `build/middleware/fancypants`.
 
@@ -51,21 +51,26 @@ Key settings:
 - `mapping.smoothing` — 0.3 is a good default, increase for smoother response
 - `ble.data_timeout_secs` — failsafe: if range data stops for this long, the toy
   is stopped and the middleware reconnects (0 disables)
-- `buttplug.actuator_types` — which actuators to drive, with optional
-  per-actuator settings (see below)
+- `ble.sample_interval_ms` / `ble.notify_interval_ms` — optional overrides
+  (10–5000ms) written to the firmware's BLE config characteristic on connect
+- `buttplug.actuator_types` — which actuators to drive when controlling a single
+  toy, with optional per-actuator settings (see below)
+- `buttplug.devices` — optional `[[buttplug.devices]]` list for controlling
+  multiple toys simultaneously, each with its own actuator and mapping settings
+  (see [Controlling multiple toys](#controlling-multiple-toys))
 
 ## Mapping modes
 
 `mapping.mode` selects what the intensity follows:
 
-- **`"distance"`** (default) — intensity follows the current reading, mapped
-  across the `min_range_mm`–`max_range_mm` window. With `invert = true`
-  closer means more intense; with `invert = false` further means more
-  intense.
-- **`"velocity"`** — intensity follows how *fast* the distance is changing,
-  regardless of direction: wave or move quickly for more intensity, hold
-  still for none. `max_speed_mm_s` sets the speed that maps to full
-  intensity (default 500; slow hand movement is roughly 100-300mm/s, a fast
+- **`"distance"`** (or **`"proximity"`**, default) — intensity follows the
+  current distance reading, mapped across the `min_range_mm`–`max_range_mm`
+  window. With `invert = true` closer means more intense; with `invert = false`
+  further means more intense.
+- **`"velocity"`** (or **`"speed"`**) — intensity follows how *fast* the
+  distance is changing, regardless of direction: wave or move quickly for more
+  intensity, hold still for none. `max_speed_mm_s` sets the speed that maps to
+  full intensity (default 500; slow hand movement is roughly 100-300mm/s, a fast
   wave ~1000mm/s). `invert` and the range window are ignored in this mode.
 
 In both modes, readings beyond `deadzone_mm` produce zero intensity, and
@@ -103,6 +108,38 @@ Supported types: `Vibrate`, `Rotate`, `Oscillate`, `Constrict`, `Inflate`,
 Actuators on the toy whose type isn't listed are left off. If a toy has
 several actuators of the same type, the nth entry of that type configures its
 nth actuator, and extra actuators reuse the last entry of that type.
+
+## Controlling multiple toys
+
+To drive several toys at once — each with its own actuator setup and mapping
+mode — define one or more `[[buttplug.devices]]` blocks. Each block can match a
+toy by `device_index` or case-insensitive substring `device_name` (or omit both
+to claim the next available matching toy), and can optionally override any
+field from `[mapping]` under `[buttplug.devices.mapping]`:
+
+```toml
+[buttplug]
+server_address = "ws://127.0.0.1:12345"
+
+# Toy 1: driven by proximity (closer = more intense, inherited from [mapping])
+[[buttplug.devices]]
+device_name = "Lush"
+actuator_types = ["Vibrate"]
+
+# Toy 2: driven by movement speed, with its own smoothing and pulse pattern
+[[buttplug.devices]]
+device_name = "Melt"
+actuator_types = [
+    { type = "Oscillate", max_intensity = 0.7, pattern = "pulse", pulse_hz = 2.0 },
+]
+[buttplug.devices.mapping]
+mode = "velocity"
+max_speed_mm_s = 600.0
+smoothing = 0.5
+```
+
+Any mapping field omitted in `[buttplug.devices.mapping]` inherits the default
+from the top-level `[mapping]` section.
 
 ## Run
 
