@@ -9,6 +9,105 @@ pub struct Config {
     pub buttplug: ButtplugConfig,
 }
 
+/// Commented default configuration template written on first run or `--generate-config`.
+pub const DEFAULT_CONFIG_TOML: &str = r#"# Fancypants Configuration
+# =====================================
+
+[ble]
+# Must match CONFIG_BT_DEVICE_NAME in firmware prj.conf
+device_name = "Fancypants"
+# How long to scan before giving up (seconds)
+scan_timeout_secs = 30
+# Delay before reconnecting after disconnect (seconds)
+reconnect_delay_secs = 5
+# Failsafe: stop the toy and reconnect if no range data arrives
+# for this long (seconds, 0 = disabled)
+data_timeout_secs = 5
+# Optional: override the firmware's sensor sampling and BLE notification
+# intervals in milliseconds (10-5000, firmware defaults to 50ms = 20Hz)
+# sample_interval_ms = 50
+# notify_interval_ms = 50
+
+[mapping]
+# What drives the intensity:
+#   "distance" = intensity follows the current distance reading (default)
+#   "velocity" = intensity follows how fast the distance is changing;
+#                movement in either direction counts, holding still = off
+mode = "distance"
+
+# Distance mode only:
+# true = closer to sensor means more intense (default, most intuitive)
+# false = further from sensor means more intense
+invert = true
+
+# Velocity mode only: speed (mm/s) that maps to max intensity.
+# Slow hand waving is ~100-300mm/s, fast is ~1000mm/s.
+max_speed_mm_s = 500.0
+
+# Sensor range window (millimeters)
+# VL53L0X effective range is ~30-1200mm
+# These define the "active zone" for intensity mapping
+min_range_mm = 30
+max_range_mm = 300
+
+# Output intensity range (0.0 - 1.0)
+min_intensity = 0.0
+max_intensity = 1.0
+
+# Distances beyond this produce zero intensity (0 = disabled)
+# Useful to create an "off" zone when you pull away
+deadzone_mm = 500
+
+# Exponential moving average smoothing factor
+# 0.0 = no smoothing (raw sensor data), 1.0 = maximum smoothing
+# 0.2-0.4 feels responsive but eliminates jitter
+smoothing = 0.3
+
+[buttplug]
+# Intiface Engine websocket address
+# Default port for Intiface Central / Intiface Engine
+server_address = "ws://127.0.0.1:12345"
+
+# Device index to control (comment out to use first available matching device)
+# device_index = 0
+
+# Actuator types to target when `devices` is not specified. Each entry is
+# either just a type name:
+#   actuator_types = ["Vibrate"]
+# or a table with per-actuator settings:
+#   actuator_types = [
+#       { type = "Vibrate", max_intensity = 0.8 },
+#       { type = "Oscillate", pattern = "pulse", pulse_hz = 2.0 },
+#   ]
+# Types: Vibrate, Rotate, Oscillate, Constrict, Inflate, Position
+# min_intensity / max_intensity (0.0-1.0) rescale the mapped intensity for
+# that actuator (at mapped intensity 0 the actuator is off).
+# pattern is "constant" (follow the sensor, default) or "pulse"
+# (on/off square wave at pulse_hz while active).
+# If a toy has several actuators of the same type, the nth entry of that type
+# configures its nth actuator; extras reuse the last entry.
+actuator_types = ["Vibrate"]
+
+# Multi-toy configuration (optional):
+# Add one or more `[[buttplug.devices]]` blocks to control multiple toys at
+# once, each with its own actuator settings and optional `[buttplug.devices.mapping]`
+# override (for example, one toy driven by proximity and another by speed).
+# Match toys by `device_index` or substring `device_name` (or omit both to
+# claim the next available matching toy).
+#
+# [[buttplug.devices]]
+# device_name = "Lush"
+# actuator_types = ["Vibrate"]
+#
+# [[buttplug.devices]]
+# device_name = "Melt"
+# actuator_types = [{ type = "Oscillate", max_intensity = 0.7, pattern = "pulse", pulse_hz = 2.0 }]
+# [buttplug.devices.mapping]
+# mode = "velocity"
+# max_speed_mm_s = 600.0
+# smoothing = 0.5
+"#;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BleConfig {
     /// BLE device name to scan for (must match CONFIG_BT_DEVICE_NAME in firmware)
@@ -20,6 +119,12 @@ pub struct BleConfig {
     /// Treat the sensor as disconnected if no range data arrives for this long
     #[serde(default = "default_data_timeout_secs")]
     pub data_timeout_secs: u64,
+    /// Optional sensor sampling interval in ms to write to the firmware config characteristic (10-5000)
+    #[serde(default)]
+    pub sample_interval_ms: Option<u16>,
+    /// Optional BLE notification interval in ms to write to the firmware config characteristic (10-5000)
+    #[serde(default)]
+    pub notify_interval_ms: Option<u16>,
 }
 
 fn default_data_timeout_secs() -> u64 {
@@ -34,10 +139,12 @@ fn default_max_speed_mm_s() -> f64 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MappingMode {
-    /// Intensity follows the current distance reading
+    /// Intensity follows the current distance reading (also accepts `"proximity"`)
     #[default]
+    #[serde(alias = "proximity")]
     Distance,
-    /// Intensity follows the speed at which the distance is changing
+    /// Intensity follows the speed at which the distance is changing (also accepts `"speed"`)
+    #[serde(alias = "speed")]
     Velocity,
 }
 
@@ -50,10 +157,10 @@ impl std::fmt::Display for MappingMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MappingConfig {
-    /// What drives the intensity: "distance" (current reading) or "velocity"
-    /// (rate of change of the reading)
+    /// What drives the intensity: "distance" / "proximity" (current reading) or
+    /// "velocity" / "speed" (rate of change of the reading)
     #[serde(default)]
     pub mode: MappingMode,
     /// Invert the mapping: closer = more intense (true) or further = more intense (false).
@@ -76,15 +183,95 @@ pub struct MappingConfig {
     pub smoothing: f64,
 }
 
+impl MappingConfig {
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        if self.min_intensity < 0.0 || self.min_intensity > 1.0 {
+            anyhow::bail!("min_intensity must be 0.0-1.0");
+        }
+        if self.max_intensity < 0.0 || self.max_intensity > 1.0 {
+            anyhow::bail!("max_intensity must be 0.0-1.0");
+        }
+        if self.min_range_mm >= self.max_range_mm {
+            anyhow::bail!("min_range_mm must be < max_range_mm");
+        }
+        if self.smoothing < 0.0 || self.smoothing > 1.0 {
+            anyhow::bail!("smoothing must be 0.0-1.0");
+        }
+        if !self.max_speed_mm_s.is_finite() || self.max_speed_mm_s <= 0.0 {
+            anyhow::bail!("max_speed_mm_s must be > 0");
+        }
+        Ok(())
+    }
+}
+
+/// Optional per-device mapping overrides. Any field left unset inherits from
+/// the top-level `[mapping]` section.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MappingOverride {
+    pub mode: Option<MappingMode>,
+    pub invert: Option<bool>,
+    pub max_speed_mm_s: Option<f64>,
+    pub min_range_mm: Option<u16>,
+    pub max_range_mm: Option<u16>,
+    pub min_intensity: Option<f64>,
+    pub max_intensity: Option<f64>,
+    pub deadzone_mm: Option<u16>,
+    pub smoothing: Option<f64>,
+}
+
+impl MappingOverride {
+    /// Merge this override onto `base`, returning a complete `MappingConfig`.
+    pub fn resolve(&self, base: &MappingConfig) -> MappingConfig {
+        MappingConfig {
+            mode: self.mode.unwrap_or(base.mode),
+            invert: self.invert.unwrap_or(base.invert),
+            max_speed_mm_s: self.max_speed_mm_s.unwrap_or(base.max_speed_mm_s),
+            min_range_mm: self.min_range_mm.unwrap_or(base.min_range_mm),
+            max_range_mm: self.max_range_mm.unwrap_or(base.max_range_mm),
+            min_intensity: self.min_intensity.unwrap_or(base.min_intensity),
+            max_intensity: self.max_intensity.unwrap_or(base.max_intensity),
+            deadzone_mm: self.deadzone_mm.unwrap_or(base.deadzone_mm),
+            smoothing: self.smoothing.unwrap_or(base.smoothing),
+        }
+    }
+}
+
+/// Per-toy target configuration (`[[buttplug.devices]]`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceTargetConfig {
+    /// Optional Buttplug device index to match
+    pub device_index: Option<u32>,
+    /// Optional case-insensitive device name substring to match
+    pub device_name: Option<String>,
+    /// Actuator types to drive on this device (defaults to `["Vibrate"]`)
+    #[serde(default = "default_actuator_types")]
+    pub actuator_types: Vec<ActuatorConfig>,
+    /// Optional mapping overrides for this specific device
+    #[serde(default)]
+    pub mapping: Option<MappingOverride>,
+}
+
+/// A fully resolved target device configuration with its own `MappingConfig`.
+#[derive(Debug, Clone)]
+pub struct ResolvedDeviceTarget {
+    pub device_index: Option<u32>,
+    pub device_name: Option<String>,
+    pub actuator_types: Vec<ActuatorConfig>,
+    pub mapping: MappingConfig,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ButtplugConfig {
     /// Intiface Engine websocket address
     pub server_address: String,
-    /// Device index to control (None = first available)
+    /// Device index to control when `devices` is empty (None = first available)
     pub device_index: Option<u32>,
-    /// Actuator types to target, with optional per-actuator settings
+    /// Actuator types to target when `devices` is empty, with optional per-actuator settings
     #[serde(default = "default_actuator_types")]
     pub actuator_types: Vec<ActuatorConfig>,
+    /// Optional list of per-toy configurations for controlling multiple toys independently
+    #[serde(default)]
+    pub devices: Vec<DeviceTargetConfig>,
 }
 
 fn default_actuator_types() -> Vec<ActuatorConfig> {
@@ -190,6 +377,8 @@ impl Default for Config {
                 scan_timeout_secs: 30,
                 reconnect_delay_secs: 5,
                 data_timeout_secs: default_data_timeout_secs(),
+                sample_interval_ms: None,
+                notify_interval_ms: None,
             },
             mapping: MappingConfig {
                 mode: MappingMode::Distance,
@@ -206,6 +395,7 @@ impl Default for Config {
                 server_address: "ws://127.0.0.1:12345".to_string(),
                 device_index: None,
                 actuator_types: default_actuator_types(),
+                devices: Vec::new(),
             },
         }
     }
@@ -220,62 +410,99 @@ impl Config {
     }
 
     pub fn save_default(path: &Path) -> anyhow::Result<()> {
-        let config = Config::default();
-        let content = toml::to_string_pretty(&config)?;
-        std::fs::write(path, content)?;
+        std::fs::write(path, DEFAULT_CONFIG_TOML)?;
         Ok(())
     }
 
+    /// Return the list of resolved target device configurations.
+    /// If `[[buttplug.devices]]` is empty, returns a single target built from
+    /// top-level `buttplug.device_index`, `buttplug.actuator_types`, and `[mapping]`.
+    pub fn resolved_device_targets(&self) -> Vec<ResolvedDeviceTarget> {
+        if self.buttplug.devices.is_empty() {
+            vec![ResolvedDeviceTarget {
+                device_index: self.buttplug.device_index,
+                device_name: None,
+                actuator_types: self.buttplug.actuator_types.clone(),
+                mapping: self.mapping.clone(),
+            }]
+        } else {
+            self.buttplug
+                .devices
+                .iter()
+                .map(|d| ResolvedDeviceTarget {
+                    device_index: d.device_index,
+                    device_name: d.device_name.clone(),
+                    actuator_types: d.actuator_types.clone(),
+                    mapping: d
+                        .mapping
+                        .as_ref()
+                        .map(|m| m.resolve(&self.mapping))
+                        .unwrap_or_else(|| self.mapping.clone()),
+                })
+                .collect()
+        }
+    }
+
     pub(crate) fn validate(&self) -> anyhow::Result<()> {
-        if self.mapping.min_intensity < 0.0 || self.mapping.min_intensity > 1.0 {
-            anyhow::bail!("min_intensity must be 0.0-1.0");
-        }
-        if self.mapping.max_intensity < 0.0 || self.mapping.max_intensity > 1.0 {
-            anyhow::bail!("max_intensity must be 0.0-1.0");
-        }
-        if self.mapping.min_range_mm >= self.mapping.max_range_mm {
-            anyhow::bail!("min_range_mm must be < max_range_mm");
-        }
-        if self.mapping.smoothing < 0.0 || self.mapping.smoothing > 1.0 {
-            anyhow::bail!("smoothing must be 0.0-1.0");
-        }
-        if !self.mapping.max_speed_mm_s.is_finite() || self.mapping.max_speed_mm_s <= 0.0 {
-            anyhow::bail!("max_speed_mm_s must be > 0");
-        }
-        if self.buttplug.actuator_types.is_empty() {
-            anyhow::bail!("actuator_types must list at least one actuator");
-        }
-        for actuator in &self.buttplug.actuator_types {
-            let s = actuator.settings();
-            s.parsed_type()?;
-            if s.min_intensity < 0.0 || s.min_intensity > 1.0 {
-                anyhow::bail!(
-                    "actuator {}: min_intensity must be 0.0-1.0",
-                    s.actuator_type
-                );
+        if let Some(ms) = self.ble.sample_interval_ms {
+            if !(10..=5000).contains(&ms) {
+                anyhow::bail!("ble.sample_interval_ms must be 10-5000");
             }
-            if s.max_intensity < 0.0 || s.max_intensity > 1.0 {
-                anyhow::bail!(
-                    "actuator {}: max_intensity must be 0.0-1.0",
-                    s.actuator_type
-                );
+        }
+        if let Some(ms) = self.ble.notify_interval_ms {
+            if !(10..=5000).contains(&ms) {
+                anyhow::bail!("ble.notify_interval_ms must be 10-5000");
             }
-            if s.min_intensity > s.max_intensity {
-                anyhow::bail!(
-                    "actuator {}: min_intensity must be <= max_intensity",
-                    s.actuator_type
-                );
+        }
+        self.mapping.validate()?;
+
+        for target in self.resolved_device_targets() {
+            target.mapping.validate()?;
+            if let Some(name) = &target.device_name {
+                if name.trim().is_empty() {
+                    anyhow::bail!("device_name must not be empty");
+                }
             }
-            if s.pattern == Pattern::Pulse && (s.pulse_hz <= 0.0 || s.pulse_hz > 10.0) {
-                anyhow::bail!(
-                    "actuator {}: pulse_hz must be > 0 and <= 10 (sensor updates \
-                     arrive at ~20Hz, faster pulses can't be rendered)",
-                    s.actuator_type
-                );
-            }
+            validate_actuators(&target.actuator_types)?;
         }
         Ok(())
     }
+}
+
+fn validate_actuators(actuators: &[ActuatorConfig]) -> anyhow::Result<()> {
+    if actuators.is_empty() {
+        anyhow::bail!("actuator_types must list at least one actuator");
+    }
+    for actuator in actuators {
+        let s = actuator.settings();
+        s.parsed_type()?;
+        if s.min_intensity < 0.0 || s.min_intensity > 1.0 {
+            anyhow::bail!(
+                "actuator {}: min_intensity must be 0.0-1.0",
+                s.actuator_type
+            );
+        }
+        if s.max_intensity < 0.0 || s.max_intensity > 1.0 {
+            anyhow::bail!(
+                "actuator {}: max_intensity must be 0.0-1.0",
+                s.actuator_type
+            );
+        }
+        if s.min_intensity > s.max_intensity {
+            anyhow::bail!(
+                "actuator {}: min_intensity must be <= max_intensity",
+                s.actuator_type
+            );
+        }
+        if s.pattern == Pattern::Pulse && (s.pulse_hz <= 0.0 || s.pulse_hz > 10.0) {
+            anyhow::bail!(
+                "actuator {}: pulse_hz must be > 0 and <= 10 (sensor updates \
+                 arrive at ~20Hz, faster pulses can't be rendered)",
+                s.actuator_type
+            );
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -508,12 +735,36 @@ server_address = "ws://127.0.0.1:12345"
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         Config::save_default(&path).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            raw.contains("# Fancypants Configuration"),
+            "saved default config should preserve comments"
+        );
         let loaded = Config::load(&path).unwrap();
         let default = Config::default();
         assert_eq!(loaded.ble.device_name, default.ble.device_name);
+        assert_eq!(loaded.ble.sample_interval_ms, None);
+        assert_eq!(loaded.ble.notify_interval_ms, None);
         assert_eq!(loaded.mapping.min_range_mm, default.mapping.min_range_mm);
         assert_eq!(loaded.mapping.max_range_mm, default.mapping.max_range_mm);
         assert!((loaded.mapping.smoothing - default.mapping.smoothing).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_validate_ble_intervals() {
+        let mut config = Config::default();
+        config.ble.sample_interval_ms = Some(5);
+        assert!(config.validate().is_err());
+
+        config.ble.sample_interval_ms = Some(5001);
+        assert!(config.validate().is_err());
+
+        config.ble.sample_interval_ms = Some(50);
+        config.ble.notify_interval_ms = Some(9);
+        assert!(config.validate().is_err());
+
+        config.ble.notify_interval_ms = Some(100);
+        config.validate().unwrap();
     }
 
     #[test]
@@ -554,6 +805,83 @@ server_address = "ws://127.0.0.1:12345"
         assert!(config.validate().is_err());
 
         config.mapping.smoothing = 1.1;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_mode_aliases_proximity_and_speed() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let toml = old_style_toml().replace("[mapping]", "[mapping]\nmode = \"proximity\"");
+        f.write_all(toml.as_bytes()).unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(config.mapping.mode, MappingMode::Distance);
+
+        let mut f2 = tempfile::NamedTempFile::new().unwrap();
+        let toml2 = old_style_toml().replace("[mapping]", "[mapping]\nmode = \"speed\"");
+        f2.write_all(toml2.as_bytes()).unwrap();
+        let config2 = Config::load(f2.path()).unwrap();
+        assert_eq!(config2.mapping.mode, MappingMode::Velocity);
+    }
+
+    #[test]
+    fn test_multi_device_config_with_per_device_mapping_override() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let toml = old_style_toml()
+            + r#"
+[[buttplug.devices]]
+device_name = "Lush"
+actuator_types = ["Vibrate"]
+
+[[buttplug.devices]]
+device_index = 1
+actuator_types = [{ type = "Oscillate", max_intensity = 0.7, pattern = "pulse", pulse_hz = 2.0 }]
+[buttplug.devices.mapping]
+mode = "velocity"
+max_speed_mm_s = 750.0
+invert = false
+smoothing = 0.5
+"#;
+        f.write_all(toml.as_bytes()).unwrap();
+        let config = Config::load(f.path()).unwrap();
+        let targets = config.resolved_device_targets();
+        assert_eq!(targets.len(), 2);
+
+        // First device inherits global distance mapping
+        assert_eq!(targets[0].device_name.as_deref(), Some("Lush"));
+        assert_eq!(targets[0].device_index, None);
+        assert_eq!(targets[0].mapping.mode, MappingMode::Distance);
+        assert!(targets[0].mapping.invert);
+        assert!((targets[0].mapping.smoothing - 0.3).abs() < f64::EPSILON);
+
+        // Second device overrides mode, speed, invert, smoothing, inherits range/deadzone
+        assert_eq!(targets[1].device_index, Some(1));
+        assert_eq!(targets[1].mapping.mode, MappingMode::Velocity);
+        assert!((targets[1].mapping.max_speed_mm_s - 750.0).abs() < f64::EPSILON);
+        assert!(!targets[1].mapping.invert);
+        assert!((targets[1].mapping.smoothing - 0.5).abs() < f64::EPSILON);
+        assert_eq!(targets[1].mapping.deadzone_mm, 500);
+    }
+
+    #[test]
+    fn test_validate_per_device_invalid_mapping_or_name() {
+        let mut config = Config::default();
+        config.buttplug.devices = vec![DeviceTargetConfig {
+            device_index: None,
+            device_name: Some("   ".to_string()),
+            actuator_types: default_actuator_types(),
+            mapping: None,
+        }];
+        assert!(config.validate().is_err());
+
+        config.buttplug.devices = vec![DeviceTargetConfig {
+            device_index: None,
+            device_name: Some("Toy".to_string()),
+            actuator_types: default_actuator_types(),
+            mapping: Some(MappingOverride {
+                smoothing: Some(2.0), // invalid
+                ..Default::default()
+            }),
+        }];
         assert!(config.validate().is_err());
     }
 

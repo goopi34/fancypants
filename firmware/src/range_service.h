@@ -60,10 +60,10 @@ int range_service_init(void);
 int range_service_update(uint16_t distance_mm);
 
 /**
- * @brief Get the current configuration.
- * @return Pointer to the active config.
+ * @brief Get a snapshot of the current configuration.
+ * @return Active configuration struct.
  */
-const struct range_config *range_service_get_config(void);
+struct range_config range_service_get_config(void);
 
 #ifdef __cplusplus
 }

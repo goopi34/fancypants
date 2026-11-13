@@ -96,6 +96,7 @@ I2C is tolerant of this wire length at 100kHz (the default). No
 additional pullups or buffering needed beyond what the VL53L0X breakout
 provides.
 
-## Future Improvements
+## Enclosures
 
-- 3D-printed enclosure that clips directly to belt
+3D-printable enclosures (OpenSCAD source + exported STLs) that clip directly
+onto the belt live in [enclosures/](enclosures/).

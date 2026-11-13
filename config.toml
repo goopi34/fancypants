@@ -11,6 +11,10 @@ reconnect_delay_secs = 5
 # Failsafe: stop the toy and reconnect if no range data arrives
 # for this long (seconds, 0 = disabled)
 data_timeout_secs = 5
+# Optional: override the firmware's sensor sampling and BLE notification
+# intervals in milliseconds (10-5000, firmware defaults to 50ms = 20Hz)
+# sample_interval_ms = 50
+# notify_interval_ms = 50
 
 [mapping]
 # What drives the intensity:
@@ -52,10 +56,11 @@ smoothing = 0.3
 # Default port for Intiface Central / Intiface Engine
 server_address = "ws://127.0.0.1:12345"
 
-# Device index to control (comment out to use first available)
+# Device index to control (comment out to use first available matching device)
 # device_index = 0
 
-# Actuator types to target. Each entry is either just a type name:
+# Actuator types to target when `devices` is not specified. Each entry is
+# either just a type name:
 #   actuator_types = ["Vibrate"]
 # or a table with per-actuator settings:
 #   actuator_types = [
@@ -70,3 +75,22 @@ server_address = "ws://127.0.0.1:12345"
 # If a toy has several actuators of the same type, the nth entry of that type
 # configures its nth actuator; extras reuse the last entry.
 actuator_types = ["Vibrate"]
+
+# Multi-toy configuration (optional):
+# Add one or more `[[buttplug.devices]]` blocks to control multiple toys at
+# once, each with its own actuator settings and optional `[buttplug.devices.mapping]`
+# override (for example, one toy driven by proximity and another by speed).
+# Match toys by `device_index` or substring `device_name` (or omit both to
+# claim the next available matching toy).
+#
+# [[buttplug.devices]]
+# device_name = "Lush"
+# actuator_types = ["Vibrate"]
+#
+# [[buttplug.devices]]
+# device_name = "Melt"
+# actuator_types = [{ type = "Oscillate", max_intensity = 0.7, pattern = "pulse", pulse_hz = 2.0 }]
+# [buttplug.devices.mapping]
+# mode = "velocity"
+# max_speed_mm_s = 600.0
+# smoothing = 0.5

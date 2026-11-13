@@ -4,11 +4,15 @@
 #include <zephyr/bluetooth/gatt.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
+#include <zephyr/sys/byteorder.h>
 
 LOG_MODULE_REGISTER(range_svc, LOG_LEVEL_INF);
 
-/* Current range reading */
+/* Current range reading (atomic-sized, read/written under config_lock) */
 static uint16_t current_range_mm;
+
+/* Protects active_config against concurrent BLE writes and sensor thread reads */
+static K_MUTEX_DEFINE(config_mutex);
 
 /* Active configuration - defaults match prj.conf */
 static struct range_config active_config = {
@@ -35,54 +39,71 @@ static void range_ccc_changed(const struct bt_gatt_attr *attr, uint16_t value)
 static ssize_t read_range(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
 			  uint16_t len, uint16_t offset)
 {
-	return bt_gatt_attr_read(conn, attr, buf, len, offset, &current_range_mm,
-				 sizeof(current_range_mm));
+	uint16_t wire_mm = sys_cpu_to_le16(current_range_mm);
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, &wire_mm, sizeof(wire_mm));
 }
 
 /* Read handler for config characteristic */
 static ssize_t read_config(struct bt_conn *conn, const struct bt_gatt_attr *attr, void *buf,
 			   uint16_t len, uint16_t offset)
 {
-	return bt_gatt_attr_read(conn, attr, buf, len, offset, &active_config,
-				 sizeof(active_config));
+	struct range_config wire_cfg;
+
+	k_mutex_lock(&config_mutex, K_FOREVER);
+	wire_cfg.sample_interval_ms = sys_cpu_to_le16(active_config.sample_interval_ms);
+	wire_cfg.notify_interval_ms = sys_cpu_to_le16(active_config.notify_interval_ms);
+	wire_cfg.max_range_mm = sys_cpu_to_le16(active_config.max_range_mm);
+	wire_cfg.min_range_mm = sys_cpu_to_le16(active_config.min_range_mm);
+	k_mutex_unlock(&config_mutex);
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, &wire_cfg, sizeof(wire_cfg));
 }
 
 /* Write handler for config characteristic */
 static ssize_t write_config(struct bt_conn *conn, const struct bt_gatt_attr *attr, const void *buf,
 			    uint16_t len, uint16_t offset, uint8_t flags)
 {
-	if (offset + len > sizeof(active_config)) {
+	if (offset != 0) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
 	}
 
-	if (len != sizeof(active_config)) {
+	if (len != sizeof(struct range_config)) {
 		return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
 	}
 
-	const struct range_config *new_config = buf;
+	const uint8_t *bytes = buf;
+	struct range_config new_config = {
+	    .sample_interval_ms = sys_get_le16(&bytes[0]),
+	    .notify_interval_ms = sys_get_le16(&bytes[2]),
+	    .max_range_mm = sys_get_le16(&bytes[4]),
+	    .min_range_mm = sys_get_le16(&bytes[6]),
+	};
 
 	/* Validate ranges */
-	if (new_config->sample_interval_ms < 10 || new_config->sample_interval_ms > 5000) {
+	if (new_config.sample_interval_ms < 10 || new_config.sample_interval_ms > 5000) {
 		LOG_WRN("Rejected config: sample_interval_ms=%u out of range",
-			new_config->sample_interval_ms);
+			new_config.sample_interval_ms);
 		return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
 	}
 
-	if (new_config->notify_interval_ms < 10 || new_config->notify_interval_ms > 5000) {
+	if (new_config.notify_interval_ms < 10 || new_config.notify_interval_ms > 5000) {
 		LOG_WRN("Rejected config: notify_interval_ms=%u out of range",
-			new_config->notify_interval_ms);
+			new_config.notify_interval_ms);
 		return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
 	}
 
-	if (new_config->min_range_mm >= new_config->max_range_mm) {
+	if (new_config.min_range_mm >= new_config.max_range_mm) {
 		LOG_WRN("Rejected config: min_range >= max_range");
 		return BT_GATT_ERR(BT_ATT_ERR_VALUE_NOT_ALLOWED);
 	}
 
-	memcpy(&active_config, new_config, sizeof(active_config));
+	k_mutex_lock(&config_mutex, K_FOREVER);
+	active_config = new_config;
+	k_mutex_unlock(&config_mutex);
+
 	LOG_INF("Config updated: sample=%ums notify=%ums range=[%u-%u]mm",
-		active_config.sample_interval_ms, active_config.notify_interval_ms,
-		active_config.min_range_mm, active_config.max_range_mm);
+		new_config.sample_interval_ms, new_config.notify_interval_ms,
+		new_config.min_range_mm, new_config.max_range_mm);
 
 	return len;
 }
@@ -115,18 +136,28 @@ int range_service_update(uint16_t distance_mm)
 		return 0;
 	}
 
+	k_mutex_lock(&config_mutex, K_FOREVER);
+	uint16_t notify_interval_ms = active_config.notify_interval_ms;
+	k_mutex_unlock(&config_mutex);
+
 	/* Rate-limit notifications independently of the sampling rate */
 	int64_t now = k_uptime_get();
-	if (now - last_notify_uptime_ms < active_config.notify_interval_ms) {
+	if (now - last_notify_uptime_ms < notify_interval_ms) {
 		return 0;
 	}
 	last_notify_uptime_ms = now;
 
-	return bt_gatt_notify(NULL, &range_svc.attrs[1], &current_range_mm,
-			      sizeof(current_range_mm));
+	uint16_t wire_mm = sys_cpu_to_le16(current_range_mm);
+	return bt_gatt_notify(NULL, &range_svc.attrs[1], &wire_mm, sizeof(wire_mm));
 }
 
-const struct range_config *range_service_get_config(void)
+struct range_config range_service_get_config(void)
 {
-	return &active_config;
+	struct range_config copy;
+
+	k_mutex_lock(&config_mutex, K_FOREVER);
+	copy = active_config;
+	k_mutex_unlock(&config_mutex);
+
+	return copy;
 }

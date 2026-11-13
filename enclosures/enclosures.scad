@@ -266,7 +266,7 @@ module front_enclosure_top() {
 }
 
 // ============================================================================
-// HIP ENCLOSURE - FEATHER 32U4 + BATTERY
+// HIP ENCLOSURE - FEATHER nRF52840 + BATTERY
 // ============================================================================
 
 module hip_enclosure_bottom() {

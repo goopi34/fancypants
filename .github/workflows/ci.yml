@@ -30,3 +30,11 @@ jobs:
           name: coverage-report
           path: build/coverage/html/
           if-no-files-found: error
+
+  firmware:
+    name: Build Firmware
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build firmware UF2
+        run: make firmware

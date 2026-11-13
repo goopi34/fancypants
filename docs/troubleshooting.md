@@ -22,6 +22,6 @@
 
 **Jerky/stuttery toy response**
 - Increase `mapping.smoothing` (try 0.5-0.7)
-- Increase `notify_interval_ms` in firmware config characteristic
+- Set `ble.notify_interval_ms` in `config.toml` (e.g. `100` for 10Hz) to reduce BLE notification frequency
 - In `mode = "velocity"`, some jitter is expected — speed estimates amplify
   sensor noise, so lean on smoothing more than in distance mode

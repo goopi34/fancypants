@@ -1,4 +1,4 @@
-use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
+use btleplug::api::{Central, CharPropFlags, Manager as _, Peripheral as _, ScanFilter, WriteType};
 use btleplug::platform::{Manager, Peripheral};
 use futures::StreamExt;
 use std::time::Duration;
@@ -9,13 +9,74 @@ use uuid::Uuid;
 // Must match firmware UUIDs
 const _RANGE_SERVICE_UUID: Uuid = Uuid::from_u128(0x00000001_7272_6e67_6669_6e6465720000);
 pub(crate) const RANGE_CHAR_UUID: Uuid = Uuid::from_u128(0x00000002_7272_6e67_6669_6e6465720000);
-const _RANGE_CONFIG_CHAR_UUID: Uuid = Uuid::from_u128(0x00000003_7272_6e67_6669_6e6465720000);
+pub(crate) const RANGE_CONFIG_CHAR_UUID: Uuid =
+    Uuid::from_u128(0x00000003_7272_6e67_6669_6e6465720000);
+/// Standard BLE Battery Level characteristic UUID (0x2A19)
+pub(crate) const BATTERY_LEVEL_CHAR_UUID: Uuid =
+    Uuid::from_u128(0x00002a19_0000_1000_8000_00805f9b34fb);
+
+/// Firmware range_config struct (8 bytes, little-endian)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FirmwareRangeConfig {
+    pub sample_interval_ms: u16,
+    pub notify_interval_ms: u16,
+    pub max_range_mm: u16,
+    pub min_range_mm: u16,
+}
+
+impl FirmwareRangeConfig {
+    pub fn from_le_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < 8 {
+            return None;
+        }
+        Some(FirmwareRangeConfig {
+            sample_interval_ms: u16::from_le_bytes([bytes[0], bytes[1]]),
+            notify_interval_ms: u16::from_le_bytes([bytes[2], bytes[3]]),
+            max_range_mm: u16::from_le_bytes([bytes[4], bytes[5]]),
+            min_range_mm: u16::from_le_bytes([bytes[6], bytes[7]]),
+        })
+    }
+
+    pub fn to_le_bytes(self) -> [u8; 8] {
+        let mut out = [0u8; 8];
+        out[0..2].copy_from_slice(&self.sample_interval_ms.to_le_bytes());
+        out[2..4].copy_from_slice(&self.notify_interval_ms.to_le_bytes());
+        out[4..6].copy_from_slice(&self.max_range_mm.to_le_bytes());
+        out[6..8].copy_from_slice(&self.min_range_mm.to_le_bytes());
+        out
+    }
+
+    /// Apply optional sample/notify interval overrides, returning the updated
+    /// config only if at least one field changed.
+    pub fn with_overrides(
+        mut self,
+        sample_interval_ms: Option<u16>,
+        notify_interval_ms: Option<u16>,
+    ) -> Option<Self> {
+        let mut changed = false;
+        if let Some(s) = sample_interval_ms {
+            if self.sample_interval_ms != s {
+                self.sample_interval_ms = s;
+                changed = true;
+            }
+        }
+        if let Some(n) = notify_interval_ms {
+            if self.notify_interval_ms != n {
+                self.notify_interval_ms = n;
+                changed = true;
+            }
+        }
+        changed.then_some(self)
+    }
+}
 
 /// Events emitted by the BLE client
 #[derive(Debug, PartialEq)]
 pub enum BleEvent {
     /// New range reading in mm
     RangeUpdate(u16),
+    /// Battery level percentage (0-100)
+    BatteryUpdate(u8),
     /// Connection lost
     Disconnected,
     /// Connection established
@@ -69,10 +130,13 @@ pub async fn find_device(device_name: &str, timeout_secs: u64) -> anyhow::Result
     }
 }
 
-/// Connect to the device, discover services, and subscribe to range notifications.
-/// Sends range updates through the provided channel.
+/// Connect to the device, discover services, optionally configure firmware intervals,
+/// read/subscribe to battery level, and subscribe to range notifications.
+/// Sends range and battery updates through the provided channel.
 pub async fn run_ble_client(
     peripheral: &Peripheral,
+    sample_interval_ms: Option<u16>,
+    notify_interval_ms: Option<u16>,
     tx: mpsc::UnboundedSender<BleEvent>,
 ) -> anyhow::Result<()> {
     // Connect
@@ -83,6 +147,50 @@ pub async fn run_ble_client(
     // Discover services
     peripheral.discover_services().await?;
     let chars = peripheral.characteristics();
+
+    // Optionally apply firmware sampling / notification interval overrides
+    if sample_interval_ms.is_some() || notify_interval_ms.is_some() {
+        if let Some(cfg_char) = find_characteristic(&chars, RANGE_CONFIG_CHAR_UUID) {
+            match peripheral.read(&cfg_char).await {
+                Ok(raw) => match FirmwareRangeConfig::from_le_bytes(&raw) {
+                    Some(current) => {
+                        if let Some(updated) =
+                            current.with_overrides(sample_interval_ms, notify_interval_ms)
+                        {
+                            peripheral
+                                .write(&cfg_char, &updated.to_le_bytes(), WriteType::WithResponse)
+                                .await?;
+                            info!(
+                                "Updated firmware config: sample={}ms, notify={}ms",
+                                updated.sample_interval_ms, updated.notify_interval_ms
+                            );
+                        }
+                    }
+                    None => warn!(
+                        "Firmware config characteristic had unexpected length ({} bytes)",
+                        raw.len()
+                    ),
+                },
+                Err(e) => warn!("Failed to read firmware config characteristic: {:#}", e),
+            }
+        } else {
+            warn!("Firmware config characteristic not found; interval overrides ignored");
+        }
+    }
+
+    // Read initial battery level and subscribe if supported
+    if let Some(bat_char) = find_characteristic(&chars, BATTERY_LEVEL_CHAR_UUID) {
+        if let Ok(raw) = peripheral.read(&bat_char).await {
+            if let Some(ble_event) = parse_notification(BATTERY_LEVEL_CHAR_UUID, &raw) {
+                let _ = tx.send(ble_event);
+            }
+        }
+        if bat_char.properties.contains(CharPropFlags::NOTIFY) {
+            if let Err(e) = peripheral.subscribe(&bat_char).await {
+                debug!("Could not subscribe to battery notifications: {:#}", e);
+            }
+        }
+    }
 
     // Find range characteristic
     let range_char = find_range_characteristic(&chars)?;
@@ -106,14 +214,19 @@ pub async fn run_ble_client(
     Ok(())
 }
 
+/// Find a characteristic by UUID in a set of discovered characteristics.
+pub(crate) fn find_characteristic(
+    chars: &std::collections::BTreeSet<btleplug::api::Characteristic>,
+    uuid: Uuid,
+) -> Option<btleplug::api::Characteristic> {
+    chars.iter().find(|c| c.uuid == uuid).cloned()
+}
+
 /// Find the range characteristic in a set of discovered characteristics.
 pub(crate) fn find_range_characteristic(
     chars: &std::collections::BTreeSet<btleplug::api::Characteristic>,
 ) -> anyhow::Result<btleplug::api::Characteristic> {
-    chars
-        .iter()
-        .find(|c| c.uuid == RANGE_CHAR_UUID)
-        .cloned()
+    find_characteristic(chars, RANGE_CHAR_UUID)
         .ok_or_else(|| anyhow::anyhow!("Range characteristic not found"))
 }
 
@@ -146,6 +259,8 @@ pub fn parse_notification(uuid: Uuid, value: &[u8]) -> Option<BleEvent> {
         Some(BleEvent::RangeUpdate(u16::from_le_bytes([
             value[0], value[1],
         ])))
+    } else if uuid == BATTERY_LEVEL_CHAR_UUID && !value.is_empty() {
+        Some(BleEvent::BatteryUpdate(value[0].min(100)))
     } else {
         None
     }
@@ -307,6 +422,50 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Range characteristic not found"));
+    }
+
+    #[test]
+    fn test_parse_battery_notification() {
+        assert_eq!(
+            parse_notification(BATTERY_LEVEL_CHAR_UUID, &[85]),
+            Some(BleEvent::BatteryUpdate(85))
+        );
+        // Clamps above 100
+        assert_eq!(
+            parse_notification(BATTERY_LEVEL_CHAR_UUID, &[250]),
+            Some(BleEvent::BatteryUpdate(100))
+        );
+        // Empty payload is ignored
+        assert_eq!(parse_notification(BATTERY_LEVEL_CHAR_UUID, &[]), None);
+    }
+
+    #[test]
+    fn test_firmware_range_config_roundtrip_and_overrides() {
+        let orig = FirmwareRangeConfig {
+            sample_interval_ms: 50,
+            notify_interval_ms: 50,
+            max_range_mm: 1200,
+            min_range_mm: 30,
+        };
+        let bytes = orig.to_le_bytes();
+        assert_eq!(FirmwareRangeConfig::from_le_bytes(&bytes), Some(orig));
+        assert_eq!(FirmwareRangeConfig::from_le_bytes(&bytes[..7]), None);
+
+        // No change -> None
+        assert_eq!(orig.with_overrides(None, None), None);
+        assert_eq!(orig.with_overrides(Some(50), Some(50)), None);
+
+        // Override notify only
+        let updated = orig.with_overrides(None, Some(100)).unwrap();
+        assert_eq!(updated.sample_interval_ms, 50);
+        assert_eq!(updated.notify_interval_ms, 100);
+        assert_eq!(updated.max_range_mm, 1200);
+        assert_eq!(updated.min_range_mm, 30);
+
+        // Override sample only
+        let updated2 = orig.with_overrides(Some(25), None).unwrap();
+        assert_eq!(updated2.sample_interval_ms, 25);
+        assert_eq!(updated2.notify_interval_ms, 50);
     }
 
     #[test]

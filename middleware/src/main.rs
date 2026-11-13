@@ -3,6 +3,7 @@ mod config;
 mod mapper;
 mod toy;
 
+use btleplug::api::Peripheral as _;
 use clap::Parser;
 use config::Config;
 use mapper::RangeMapper;
@@ -164,31 +165,43 @@ fn config_home(
 pub(crate) fn log_config(config: &Config) {
     info!("Configuration loaded:");
     info!("  BLE device: {}", config.ble.device_name);
-    match config.mapping.mode {
+    log_mapping("  Default mapping", &config.mapping);
+    info!("  Buttplug server: {}", config.buttplug.server_address);
+    for (idx, target) in config.resolved_device_targets().iter().enumerate() {
+        info!(
+            "  Target {}: index={:?}, name={:?}, mode={}",
+            idx, target.device_index, target.device_name, target.mapping.mode
+        );
+        for actuator in &target.actuator_types {
+            let s = actuator.settings();
+            info!(
+                "    Actuator {}: intensity [{}-{}], pattern={}",
+                s.actuator_type, s.min_intensity, s.max_intensity, s.pattern,
+            );
+        }
+    }
+}
+
+fn log_mapping(prefix: &str, mapping: &crate::config::MappingConfig) {
+    match mapping.mode {
         crate::config::MappingMode::Distance => info!(
-            "  Mapping: range [{}-{}mm] -> intensity [{}-{}], invert={}, deadzone={}mm",
-            config.mapping.min_range_mm,
-            config.mapping.max_range_mm,
-            config.mapping.min_intensity,
-            config.mapping.max_intensity,
-            config.mapping.invert,
-            config.mapping.deadzone_mm,
+            "{}: range [{}-{}mm] -> intensity [{}-{}], invert={}, deadzone={}mm",
+            prefix,
+            mapping.min_range_mm,
+            mapping.max_range_mm,
+            mapping.min_intensity,
+            mapping.max_intensity,
+            mapping.invert,
+            mapping.deadzone_mm,
         ),
         crate::config::MappingMode::Velocity => info!(
-            "  Mapping: speed [0-{}mm/s] -> intensity [{}-{}], deadzone={}mm",
-            config.mapping.max_speed_mm_s,
-            config.mapping.min_intensity,
-            config.mapping.max_intensity,
-            config.mapping.deadzone_mm,
+            "{}: speed [0-{}mm/s] -> intensity [{}-{}], deadzone={}mm",
+            prefix,
+            mapping.max_speed_mm_s,
+            mapping.min_intensity,
+            mapping.max_intensity,
+            mapping.deadzone_mm,
         ),
-    }
-    info!("  Buttplug server: {}", config.buttplug.server_address);
-    for actuator in &config.buttplug.actuator_types {
-        let s = actuator.settings();
-        info!(
-            "  Actuator {}: intensity [{}-{}], pattern={}",
-            s.actuator_type, s.min_intensity, s.max_intensity, s.pattern,
-        );
     }
 }
 
@@ -239,14 +252,11 @@ async fn run_session(config: &Config, running: &Arc<AtomicBool>) -> anyhow::Resu
     let peripheral: btleplug::platform::Peripheral =
         ble::find_device(&config.ble.device_name, config.ble.scan_timeout_secs).await?;
 
-    // 2. Connect to Intiface Engine
+    // 2. Connect to Intiface Engine and configure target toys
     let mut toy: toy::ToyController =
         toy::ToyController::connect(&config.buttplug.server_address).await?;
-    toy.find_device(
-        config.buttplug.device_index,
-        &config.buttplug.actuator_types,
-    )
-    .await?;
+    let targets = config.resolved_device_targets();
+    toy.find_devices(&targets).await?;
 
     // 3. Set up range mapper
     let mut mapper = RangeMapper::new(config.mapping.clone());
@@ -255,8 +265,12 @@ async fn run_session(config: &Config, running: &Arc<AtomicBool>) -> anyhow::Resu
     let (tx, mut rx) = mpsc::unbounded_channel();
     let ble_handle = {
         let peripheral = peripheral.clone();
+        let sample_interval_ms = config.ble.sample_interval_ms;
+        let notify_interval_ms = config.ble.notify_interval_ms;
         tokio::spawn(async move {
-            if let Err(e) = ble::run_ble_client(&peripheral, tx).await {
+            if let Err(e) =
+                ble::run_ble_client(&peripheral, sample_interval_ms, notify_interval_ms, tx).await
+            {
                 error!("BLE client error: {:#}", e);
             }
         })
@@ -277,6 +291,7 @@ async fn run_session(config: &Config, running: &Arc<AtomicBool>) -> anyhow::Resu
     let _ = backend.stop().await;
     let _ = backend.disconnect().await;
     ble_handle.abort();
+    let _ = peripheral.disconnect().await;
 
     result
 }
@@ -297,6 +312,8 @@ pub(crate) async fn run_session_inner(
 
     let mut check = tokio::time::interval(std::time::Duration::from_secs(1));
     check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut pulse_tick = tokio::time::interval(std::time::Duration::from_millis(25));
+    pulse_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut last_data = tokio::time::Instant::now();
 
     while running.load(Ordering::SeqCst) {
@@ -305,9 +322,24 @@ pub(crate) async fn run_session_inner(
                 match event {
                     Some(ble::BleEvent::RangeUpdate(distance_mm)) => {
                         last_data = tokio::time::Instant::now();
-                        let intensity = mapper.map(distance_mm);
-                        if let Err(e) = toy.set_intensity(intensity).await {
-                            warn!("Failed to set intensity: {:#}", e);
+                        match toy.update_range(distance_mm).await {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                let intensity = mapper.map(distance_mm);
+                                if let Err(e) = toy.set_intensity(intensity).await {
+                                    warn!("Failed to set intensity: {:#}", e);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to set intensity: {:#}", e);
+                            }
+                        }
+                    }
+                    Some(ble::BleEvent::BatteryUpdate(pct)) => {
+                        if pct <= 20 {
+                            warn!("Sensor battery low: {}%", pct);
+                        } else {
+                            info!("Sensor battery: {}%", pct);
                         }
                     }
                     Some(ble::BleEvent::Disconnected) | None => {
@@ -316,6 +348,11 @@ pub(crate) async fn run_session_inner(
                     Some(ble::BleEvent::Connected) => {
                         info!("BLE connected");
                     }
+                }
+            }
+            _ = pulse_tick.tick() => {
+                if let Err(e) = toy.tick().await {
+                    warn!("Failed to update pulse pattern: {:#}", e);
                 }
             }
             _ = check.tick() => {
@@ -441,6 +478,8 @@ mod tests {
         let running = Arc::new(AtomicBool::new(true));
 
         tx.send(ble::BleEvent::Connected).unwrap();
+        tx.send(ble::BleEvent::BatteryUpdate(85)).unwrap();
+        tx.send(ble::BleEvent::BatteryUpdate(15)).unwrap();
         tx.send(ble::BleEvent::RangeUpdate(165)).unwrap();
         drop(tx);
 

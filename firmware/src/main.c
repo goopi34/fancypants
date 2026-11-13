@@ -116,23 +116,23 @@ static void sensor_thread_fn(void *p1, void *p2, void *p3)
 	LOG_INF("Sensor thread started");
 
 	while (1) {
-		const struct range_config *cfg = range_service_get_config();
+		struct range_config cfg = range_service_get_config();
 
 		int distance = read_range_mm();
 		if (distance >= 0) {
 			/* Clamp to configured range */
 			uint16_t clamped = (uint16_t)distance;
-			if (clamped < cfg->min_range_mm) {
-				clamped = cfg->min_range_mm;
+			if (clamped < cfg.min_range_mm) {
+				clamped = cfg.min_range_mm;
 			}
-			if (clamped > cfg->max_range_mm) {
-				clamped = cfg->max_range_mm;
+			if (clamped > cfg.max_range_mm) {
+				clamped = cfg.max_range_mm;
 			}
 
 			range_service_update(clamped);
 		}
 
-		k_msleep(cfg->sample_interval_ms);
+		k_msleep(cfg.sample_interval_ms);
 	}
 }
 
