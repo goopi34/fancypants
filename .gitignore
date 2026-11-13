@@ -5,8 +5,10 @@ build/
 firmware/build/
 firmware/twister-out*/
 
-# Middleware (Rust/Cargo)
+# Middleware & App (Rust/Cargo/Tauri)
 middleware/target/
+app/src-tauri/target/
+app/src-tauri/gen/
 
 # Editor / IDE
 .vscode/

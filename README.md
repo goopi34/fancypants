@@ -25,17 +25,18 @@ Prebuilt binaries (firmware `.uf2` + Linux x86_64 middleware) are on the
 you need `docker` (or `podman`) and `make`; everything builds in containers:
 
 ```bash
-# 1. Build firmware + middleware
+# 1. Build firmware + CLI middleware (or `make app` for the Tauri v2 GUI app)
 make
+make app
 
 # 2. Flash the Feather: double-tap reset, then copy the UF2
 #    (or `west flash` via SWD; `make flash` prints the details)
 cp build/firmware/zephyr.uf2 /run/media/$USER/FTHR840BOOT/
 
-# 3. Start Intiface Central with your toy connected, then run the middleware
-#    (finds ./config.toml or ~/.config/fancypants/config.toml automatically,
-#     and creates the latter on first run)
-./build/middleware/fancypants
+# 3. Run the GUI app (supports both standalone BLE and Intiface Central)
+#    or the headless CLI:
+./build/app/fancypants-app
+# ./build/middleware/fancypants
 ```
 
 Move your hand near the sensor and enjoy.

@@ -53,6 +53,9 @@ Key settings:
   is stopped and the middleware reconnects (0 disables)
 - `ble.sample_interval_ms` / `ble.notify_interval_ms` — optional overrides
   (10–5000ms) written to the firmware's BLE config characteristic on connect
+- `buttplug.mode` — `"intiface"` (connect to Intiface Central over WebSocket,
+  default) or `"standalone"` (run an embedded Buttplug BLE server in-process so
+  Intiface Central is not required)
 - `buttplug.actuator_types` — which actuators to drive when controlling a single
   toy, with optional per-actuator settings (see below)
 - `buttplug.devices` — optional `[[buttplug.devices]]` list for controlling

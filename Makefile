@@ -34,6 +34,7 @@ PROJECT_DIR    := $(shell pwd)
 BUILD_DIR      := $(PROJECT_DIR)/build
 FW_BUILD_DIR   := $(BUILD_DIR)/firmware
 MW_BUILD_DIR   := $(BUILD_DIR)/middleware
+APP_BUILD_DIR  := $(BUILD_DIR)/app
 
 # Auto-detect container runtime
 CONTAINER ?= $(shell command -v podman >/dev/null 2>&1 && echo podman || echo docker)
@@ -45,7 +46,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v/
 USER_ARGS := -u $(shell id -u):$(shell id -g)
 
 # ── Targets ────────────────────────────────────────────────────────────
-.PHONY: all firmware middleware lint lint-middleware lint-firmware test test-middleware coverage format-middleware format-firmware clean shell-fw shell-mw flash help
+.PHONY: all firmware middleware app lint lint-middleware lint-app lint-firmware test test-middleware coverage format-middleware format-firmware clean shell-fw shell-mw flash help
 
 all: firmware middleware
 
@@ -117,8 +118,45 @@ $(MW_BUILD_DIR)/fancypants: middleware/src/*.rs middleware/Cargo.toml middleware
 	@echo ""
 	@echo "✓ Middleware built: $(MW_BUILD_DIR)/fancypants"
 
+# ── Desktop / Mobile GUI App (Tauri v2) ────────────────────────────────
+app: $(APP_BUILD_DIR)/fancypants-app
+
+$(APP_BUILD_DIR)/fancypants-app: app/src-tauri/src/*.rs app/src-tauri/Cargo.toml app/src-tauri/tauri.conf.json app/ui/* middleware/src/*.rs middleware/Cargo.toml
+	@echo "══════════════════════════════════════════════════════════════"
+	@echo "  Building fancypants-app (Tauri v2 GUI)"
+	@echo "  Image:   $(RUST_IMAGE)"
+	@echo "  Version: $(VERSION)"
+	@echo "══════════════════════════════════════════════════════════════"
+	@mkdir -p $(APP_BUILD_DIR) $(BUILD_DIR)/cargo-cache $(BUILD_DIR)/cargo-target
+	$(CONTAINER) run --rm \
+		-e HOST_UID=$(shell id -u) \
+		-e HOST_GID=$(shell id -g) \
+		-e FANCYPANTS_VERSION=$(VERSION) \
+		-e CARGO_TARGET_DIR=/workdir/cargo-target \
+		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
+		-v $(PROJECT_DIR)/app:/workdir/app:ro \
+		-v $(APP_BUILD_DIR):/workdir/output \
+		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-v $(BUILD_DIR)/cargo-target:/workdir/cargo-target \
+		-w /workdir \
+		$(RUST_IMAGE) \
+		sh -c '\
+			cp -r middleware /tmp/middleware && \
+			cp -r app /tmp/app && \
+			cd /tmp/app/src-tauri && \
+			apt-get update -qq && \
+			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev >/dev/null 2>&1 && \
+			FANCYPANTS_VERSION=$$FANCYPANTS_VERSION cargo build --release 2>&1 && \
+			cp $$CARGO_TARGET_DIR/release/fancypants-app /workdir/output/fancypants-app && \
+			if [ "$$(stat -c %u /workdir/output)" != "0" ]; then \
+				chown $$HOST_UID:$$HOST_GID /workdir/output/fancypants-app; \
+			fi \
+		'
+	@echo ""
+	@echo "✓ GUI App built: $(APP_BUILD_DIR)/fancypants-app"
+
 # ── Lint ───────────────────────────────────────────────────────────────
-lint: lint-middleware lint-firmware
+lint: lint-middleware lint-app lint-firmware
 
 lint-middleware:
 	@echo "══════════════════════════════════════════════════════════════"
@@ -137,6 +175,30 @@ lint-middleware:
 			cd /tmp/build && \
 			apt-get update -qq && \
 			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev >/dev/null 2>&1 && \
+			rustup component add rustfmt clippy 2>/dev/null && \
+			cargo fmt --check && \
+			cargo clippy -- -D warnings \
+		'
+
+lint-app:
+	@echo "══════════════════════════════════════════════════════════════"
+	@echo "  Linting app (fmt + clippy)"
+	@echo "══════════════════════════════════════════════════════════════"
+	@mkdir -p $(BUILD_DIR)/cargo-cache $(BUILD_DIR)/cargo-target
+	$(CONTAINER) run --rm \
+		-e CARGO_TARGET_DIR=/workdir/cargo-target \
+		-v $(PROJECT_DIR)/middleware:/workdir/middleware:ro \
+		-v $(PROJECT_DIR)/app:/workdir/app:ro \
+		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
+		-v $(BUILD_DIR)/cargo-target:/workdir/cargo-target \
+		-w /workdir \
+		$(RUST_IMAGE) \
+		sh -c '\
+			cp -r middleware /tmp/middleware && \
+			cp -r app /tmp/app && \
+			cd /tmp/app/src-tauri && \
+			apt-get update -qq && \
+			apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev >/dev/null 2>&1 && \
 			rustup component add rustfmt clippy 2>/dev/null && \
 			cargo fmt --check && \
 			cargo clippy -- -D warnings \
@@ -215,15 +277,16 @@ coverage:
 
 # ── Format (establish baseline) ────────────────────────────────────────
 format-middleware:
-	@echo "Auto-formatting middleware Rust sources with cargo fmt..."
+	@echo "Auto-formatting middleware and app Rust sources with cargo fmt..."
 	$(CONTAINER) run --rm \
 		$(USER_ARGS) \
 		-v $(PROJECT_DIR)/middleware:/workdir/middleware \
+		-v $(PROJECT_DIR)/app:/workdir/app \
 		-v $(BUILD_DIR)/cargo-cache:/usr/local/cargo/registry \
-		-w /workdir/middleware \
+		-w /workdir \
 		$(RUST_IMAGE) \
-		sh -c 'rustup component add rustfmt 2>/dev/null && cargo fmt'
-	@echo "✓ Middleware sources formatted"
+		sh -c 'rustup component add rustfmt 2>/dev/null && (cd middleware && cargo fmt) && (cd app/src-tauri && cargo fmt)'
+	@echo "✓ Middleware and app sources formatted"
 
 format-firmware:
 	@echo "Auto-formatting firmware C/H sources with clang-format..."
@@ -284,8 +347,9 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  make firmware        Build nRF52 firmware (UF2)"
-	@echo "  make middleware       Build Rust middleware binary"
-	@echo "  make all             Build both (default)"
+	@echo "  make middleware       Build Rust CLI middleware binary"
+	@echo "  make app             Build Tauri v2 GUI desktop application"
+	@echo "  make all             Build firmware + middleware (default)"
 	@echo "  make lint            Lint both components inside containers"
 	@echo "  make lint-middleware  Run cargo fmt --check and clippy"
 	@echo "  make lint-firmware    Run clang-format --dry-run on firmware sources"

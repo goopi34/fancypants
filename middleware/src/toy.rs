@@ -1,12 +1,33 @@
-use crate::config::{ActuatorConfig, Pattern, ResolvedDeviceTarget};
+use crate::config::{ActuatorConfig, ButtplugConfig, EngineMode, Pattern, ResolvedDeviceTarget};
 use crate::mapper::RangeMapper;
 use buttplug::client::{device::ScalarCommand, ButtplugClient, ButtplugClientDevice};
-use buttplug::core::connector::new_json_ws_client_connector;
+use buttplug::core::connector::{
+    new_json_ws_client_connector, ButtplugInProcessClientConnectorBuilder,
+};
 use buttplug::core::message::ActuatorType;
+use buttplug::server::{
+    device::{
+        configuration::DeviceConfigurationManagerBuilder,
+        hardware::communication::btleplug::BtlePlugCommunicationManagerBuilder,
+        ServerDeviceManagerBuilder,
+    },
+    ButtplugServerBuilder,
+};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
+
+/// Live telemetry snapshot for a single controlled toy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ToyTelemetry {
+    pub index: u32,
+    pub name: String,
+    pub mode: String,
+    pub intensity: f64,
+    pub actuator_values: Vec<f64>,
+}
 
 /// Trait abstracting toy control for testability
 #[async_trait::async_trait]
@@ -23,6 +44,14 @@ pub trait ToyBackend: Send {
     /// set intensity.
     async fn tick(&mut self) -> anyhow::Result<()> {
         Ok(())
+    }
+    /// Hot-reload per-device mapping and actuator configurations without reconnecting.
+    fn apply_targets(&mut self, _targets: &[ResolvedDeviceTarget]) -> anyhow::Result<()> {
+        Ok(())
+    }
+    /// Return a snapshot of live per-toy telemetry.
+    fn telemetry(&self) -> Vec<ToyTelemetry> {
+        Vec::new()
     }
     async fn stop(&mut self) -> anyhow::Result<()>;
     async fn disconnect(&self) -> anyhow::Result<()>;
@@ -327,21 +356,50 @@ pub(crate) fn select_device_for_target(
 
 /// One active toy slot with its own `ToyState` and `RangeMapper`.
 pub(crate) struct ManagedToy<D: DeviceHandle> {
+    pub index: u32,
+    pub name: String,
+    pub device_types: Vec<ActuatorType>,
     pub state: ToyState<D>,
     pub mapper: RangeMapper,
+    pub mode_name: String,
 }
 
 impl<D: DeviceHandle + Sync> ManagedToy<D> {
-    pub fn new(device: D, actuators: Vec<PlannedActuator>, mapper: RangeMapper) -> Self {
+    pub fn new(
+        index: u32,
+        name: String,
+        device_types: Vec<ActuatorType>,
+        device: D,
+        actuators: Vec<PlannedActuator>,
+        mapper: RangeMapper,
+        mode_name: String,
+    ) -> Self {
         let mut state = ToyState::new(true);
         state.set_device(device);
         state.set_actuators(actuators);
-        ManagedToy { state, mapper }
+        ManagedToy {
+            index,
+            name,
+            device_types,
+            state,
+            mapper,
+            mode_name,
+        }
     }
 
     pub async fn update_range(&mut self, distance_mm: u16) -> anyhow::Result<()> {
         let intensity = self.mapper.map(distance_mm);
         self.state.set_intensity(intensity).await
+    }
+
+    pub fn telemetry(&self) -> ToyTelemetry {
+        ToyTelemetry {
+            index: self.index,
+            name: self.name.clone(),
+            mode: self.mode_name.clone(),
+            intensity: self.state.last_intensity,
+            actuator_values: self.state.last_values.clone(),
+        }
     }
 }
 
@@ -352,12 +410,44 @@ pub struct ToyController {
 }
 
 impl ToyController {
+    /// Connect to either an external Intiface Engine over WebSocket or an
+    /// in-process embedded Buttplug server (standalone mode).
+    pub async fn connect_for_config(buttplug_cfg: &ButtplugConfig) -> anyhow::Result<Self> {
+        match buttplug_cfg.mode {
+            EngineMode::Intiface => Self::connect(&buttplug_cfg.server_address).await,
+            EngineMode::Standalone => Self::connect_standalone().await,
+        }
+    }
+
     /// Connect to Intiface Engine via websocket
     pub async fn connect(server_address: &str) -> anyhow::Result<Self> {
         let client = ButtplugClient::new("Fancypants");
         let connector = new_json_ws_client_connector(server_address);
         client.connect(connector).await?;
         info!("Connected to Intiface Engine at {}", server_address);
+
+        Ok(ToyController {
+            client,
+            toys: Vec::new(),
+        })
+    }
+
+    /// Start an embedded in-process Buttplug server with a BtlePlug communication
+    /// manager so BLE toys can be controlled directly without Intiface Central.
+    pub async fn connect_standalone() -> anyhow::Result<Self> {
+        let dcm = DeviceConfigurationManagerBuilder::default().finish()?;
+        let mut dm_builder = ServerDeviceManagerBuilder::new(dcm);
+        dm_builder.comm_manager(BtlePlugCommunicationManagerBuilder::default());
+        let dm = dm_builder.finish()?;
+        let server = ButtplugServerBuilder::new(dm)
+            .name("Fancypants Embedded Server")
+            .finish()?;
+        let connector = ButtplugInProcessClientConnectorBuilder::default()
+            .server(server)
+            .finish();
+        let client = ButtplugClient::new("Fancypants");
+        client.connect(connector).await?;
+        info!("Started standalone embedded Buttplug engine (BLE)");
 
         Ok(ToyController {
             client,
@@ -404,8 +494,8 @@ impl ToyController {
                 &claimed_indices,
             )?;
             let device = devices[pos].clone();
-            let device_types = &infos[pos].scalar_types;
-            let plan = plan_actuators(device_types, &configured);
+            let device_types = infos[pos].scalar_types.clone();
+            let plan = plan_actuators(&device_types, &configured);
             if plan.is_empty() {
                 anyhow::bail!(
                     "Device {} has no configured actuator types (configured: {:?}, device has: {:?})",
@@ -435,11 +525,17 @@ impl ToyController {
                 );
             }
 
-            claimed_indices.push(device.index());
+            let idx = device.index();
+            let name = device.name().to_string();
+            claimed_indices.push(idx);
             managed.push(ManagedToy::new(
+                idx,
+                name,
+                device_types,
                 ButtplugDeviceHandle(device),
                 plan,
                 RangeMapper::new(target.mapping.clone()),
+                target.mapping.mode.to_string(),
             ));
         }
 
@@ -503,6 +599,23 @@ impl ToyBackend for ToyController {
             Some(e) => Err(e),
             None => Ok(()),
         }
+    }
+
+    fn apply_targets(&mut self, targets: &[ResolvedDeviceTarget]) -> anyhow::Result<()> {
+        for (toy, target) in self.toys.iter_mut().zip(targets.iter()) {
+            let configured = resolve_actuators(&target.actuator_types)?;
+            let plan = plan_actuators(&toy.device_types, &configured);
+            if !plan.is_empty() {
+                toy.state.set_actuators(plan);
+            }
+            toy.mapper.update_config(target.mapping.clone());
+            toy.mode_name = target.mapping.mode.to_string();
+        }
+        Ok(())
+    }
+
+    fn telemetry(&self) -> Vec<ToyTelemetry> {
+        self.toys.iter().map(|t| t.telemetry()).collect()
     }
 
     async fn stop(&mut self) -> anyhow::Result<()> {
@@ -992,6 +1105,9 @@ mod tests {
 
         // Toy 1: proximity (closer = more intense, invert = true)
         let mut toy1 = ManagedToy::new(
+            0,
+            "Lush".to_string(),
+            vec![ActuatorType::Vibrate],
             dev1,
             vec![planned(0, resolved(ActuatorType::Vibrate))],
             RangeMapper::new(MappingConfig {
@@ -1005,10 +1121,14 @@ mod tests {
                 deadzone_mm: 500,
                 smoothing: 0.0,
             }),
+            "distance".to_string(),
         );
 
         // Toy 2: proximity inverted false (further = more intense)
         let mut toy2 = ManagedToy::new(
+            1,
+            "Melt".to_string(),
+            vec![ActuatorType::Oscillate],
             dev2,
             vec![planned(0, resolved(ActuatorType::Oscillate))],
             RangeMapper::new(MappingConfig {
@@ -1022,6 +1142,7 @@ mod tests {
                 deadzone_mm: 500,
                 smoothing: 0.0,
             }),
+            "distance".to_string(),
         );
 
         // At 30mm (closest): toy1 is at 1.0, toy2 is at 0.0

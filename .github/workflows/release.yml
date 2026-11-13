@@ -16,8 +16,105 @@ env:
   CONTAINER: docker
 
 jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Install Android NDK and Tauri CLI
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" "platforms;android-34" "build-tools;34.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          rustup target add aarch64-linux-android
+          cargo install tauri-cli --version "^2.0.0" --locked
+
+      - name: Initialize and build Android APK
+        working-directory: app/src-tauri
+        run: |
+          cargo tauri android init --ci
+          # Inject BLE + ForegroundService permissions into generated AndroidManifest.xml
+          python3 -c '
+          import pathlib
+          manifest = pathlib.Path("gen/android/app/src/main/AndroidManifest.xml")
+          txt = manifest.read_text()
+          perms = """
+              <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+              <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
+          """
+          txt = txt.replace("<application", perms + "\n    <application", 1)
+          manifest.write_text(txt)
+          '
+          cp mobile/android/FancypantsBleService.kt gen/android/app/src/main/java/io/github/goopi34/fancypants/
+          FANCYPANTS_VERSION="$VERSION" cargo tauri android build --apk --target aarch64
+          mkdir -p ../../dist
+          APK=$(find gen/android/app/build/outputs/apk -name "*.apk" | head -1)
+          # Sign unsigned release APK with a fresh debug/sideload key if needed so Android can install it directly
+          if echo "$APK" | grep -q "unsigned"; then
+            keytool -genkeypair -v -keystore /tmp/sideload.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Fancypants,O=Android,C=US"
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" sign --ks /tmp/sideload.keystore --ks-pass pass:android --key-pass pass:android --out "../../dist/fancypants-${VERSION}-android-arm64.apk" "$APK"
+          else
+            cp "$APK" "../../dist/fancypants-${VERSION}-android-arm64.apk"
+          fi
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-dist
+          path: dist/*.apk
+          if-no-files-found: error
+
+  build-windows:
+    name: Build Windows App & CLI
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set version from tag
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build Windows CLI and GUI App
+        shell: bash
+        run: |
+          FANCYPANTS_VERSION="$VERSION" cargo build --release --manifest-path middleware/Cargo.toml
+          FANCYPANTS_VERSION="$VERSION" cargo build --release --manifest-path app/src-tauri/Cargo.toml
+          staging="fancypants-${VERSION}-windows-x86_64"
+          mkdir -p "dist/$staging"
+          cp middleware/target/release/fancypants.exe "dist/$staging/"
+          cp app/src-tauri/target/release/fancypants-app.exe "dist/$staging/"
+          cp config.toml README.md LICENSE "dist/$staging/"
+          cp -r docs "dist/$staging/docs"
+          (cd dist && 7z a -tzip "${staging}.zip" "$staging")
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-dist
+          path: dist/*.zip
+          if-no-files-found: error
+
   release:
     name: Build & Release
+    needs: [build-windows, build-android]
     runs-on: ubuntu-latest
     permissions:
       contents: write # create GitHub Release and upload release assets
@@ -35,19 +132,34 @@ jobs:
       - name: Build firmware
         run: make firmware VERSION="$VERSION"
 
-      - name: Build middleware
+      - name: Build middleware CLI
         run: make middleware VERSION="$VERSION"
+
+      - name: Build Linux GUI App
+        run: make app VERSION="$VERSION"
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-dist
+          path: dist
+
+      - name: Download Android artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android-dist
+          path: dist
 
       - name: Package artifacts
         run: |
           mkdir -p dist
           # Firmware: a bare UF2, ready to drag onto the FTHR840BOOT drive
           cp build/firmware/zephyr.uf2 "dist/fancypants-nrf52-${VERSION}.uf2"
-          # Middleware: binary + documented sample config, so extracting the
-          # tarball and running ./fancypants just works
+          # Linux bundle: CLI + Tauri GUI binary + documented sample config
           staging="fancypants-${VERSION}-linux-x86_64"
           mkdir "dist/$staging"
           cp build/middleware/fancypants "dist/$staging/"
+          cp build/app/fancypants-app "dist/$staging/"
           cp config.toml README.md LICENSE "dist/$staging/"
           cp -r docs "dist/$staging/docs"
           tar -C dist -czf "dist/$staging.tar.gz" "$staging"
@@ -56,5 +168,5 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*.uf2 dist/*.tar.gz
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*.uf2 dist/*.tar.gz dist/*.zip dist/*.apk
 
