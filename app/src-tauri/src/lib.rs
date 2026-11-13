@@ -3,15 +3,16 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// Android JNI entry point to initialize `btleplug`'s global JVM pointer so
-/// both the Fancypants sensor client and the embedded Buttplug BLE server can
-/// access Android's BluetoothAdapter from Rust threads.
+/// Android JNI entry point to initialize `jni-utils` and `btleplug`'s global JVM
+/// pointer and class cache so both the Fancypants sensor client and the embedded
+/// Buttplug BLE server can access Android's BluetoothAdapter from Rust threads.
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_io_github_goopi34_fancypants_MainActivity_initBtleplug(
     env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) {
+    let _ = jni_utils::init(&env);
     let _ = btleplug::platform::init(&env);
 }
 
