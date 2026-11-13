@@ -1228,7 +1228,9 @@ name = "fancypants-app"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "btleplug",
  "fancypants",
+ "jni 0.19.0",
  "serde",
  "serde_json",
  "tauri",
