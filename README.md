@@ -33,10 +33,10 @@ make app
 #    (or `west flash` via SWD; `make flash` prints the details)
 cp build/firmware/zephyr.uf2 /run/media/$USER/FTHR840BOOT/
 
-# 3. Run the GUI app (supports both standalone BLE and Intiface Central)
+# 3. Launch the GUI app (supports both standalone BLE and Intiface Central)
 #    or the headless CLI:
-./build/app/fancypants-app
-# ./build/middleware/fancypants
+make run-app
+# make run-cli
 ```
 
 Move your hand near the sensor and enjoy.

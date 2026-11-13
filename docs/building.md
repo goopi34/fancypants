@@ -16,6 +16,10 @@ make middleware
 # Build the Tauri v2 GUI desktop application
 make app
 
+# Build (if needed) and launch the GUI application or CLI
+make run-app
+make run-cli
+
 # Clean all build artifacts
 make clean
 

@@ -6,7 +6,10 @@
 # Usage:
 #   make firmware        Build nRF52 firmware (outputs build/firmware/zephyr.uf2)
 #   make middleware       Build Rust middleware (outputs build/middleware/fancypants)
-#   make all             Build both
+#   make app             Build Tauri v2 GUI desktop application (outputs build/app/fancypants-app)
+#   make run-app         Build (if needed) and launch the GUI application
+#   make run-cli         Build (if needed) and launch the CLI middleware
+#   make all             Build both firmware and middleware
 #   make lint            Lint both components (inside containers)
 #   make coverage        Run coverage report (HTML output in build/coverage/)
 #   make test            Run middleware tests (inside container)
@@ -46,7 +49,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null | sed 's/^v/
 USER_ARGS := -u $(shell id -u):$(shell id -g)
 
 # ── Targets ────────────────────────────────────────────────────────────
-.PHONY: all firmware middleware app lint lint-middleware lint-app lint-firmware test test-middleware coverage format-middleware format-firmware clean shell-fw shell-mw flash help
+.PHONY: all firmware middleware app run-app run-cli lint lint-middleware lint-app lint-firmware test test-middleware coverage format-middleware format-firmware clean shell-fw shell-mw flash help
 
 all: firmware middleware
 
@@ -322,6 +325,23 @@ shell-mw:
 		$(RUST_IMAGE) \
 		/bin/bash
 
+# ── Run (GUI App / CLI) ────────────────────────────────────────────────
+run-app:
+	@if [ -d /nix/store ] && command -v nix >/dev/null 2>&1; then \
+		nix run $(PROJECT_DIR)#app; \
+	else \
+		$(MAKE) $(APP_BUILD_DIR)/fancypants-app && \
+		WEBKIT_DISABLE_DMABUF_RENDERER=1 $(APP_BUILD_DIR)/fancypants-app; \
+	fi
+
+run-cli:
+	@if [ -d /nix/store ] && command -v nix >/dev/null 2>&1; then \
+		nix run $(PROJECT_DIR)#cli; \
+	else \
+		$(MAKE) $(MW_BUILD_DIR)/fancypants && \
+		$(MW_BUILD_DIR)/fancypants; \
+	fi
+
 # ── Flash Instructions ─────────────────────────────────────────────────
 flash:
 	@echo ""
@@ -349,6 +369,8 @@ help:
 	@echo "  make firmware        Build nRF52 firmware (UF2)"
 	@echo "  make middleware       Build Rust CLI middleware binary"
 	@echo "  make app             Build Tauri v2 GUI desktop application"
+	@echo "  make run-app         Build and launch the GUI desktop application"
+	@echo "  make run-cli         Build and launch the CLI middleware"
 	@echo "  make all             Build firmware + middleware (default)"
 	@echo "  make lint            Lint both components inside containers"
 	@echo "  make lint-middleware  Run cargo fmt --check and clippy"
