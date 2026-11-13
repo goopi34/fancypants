@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Fancypants</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- Top Header -->
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-logo" aria-hidden="true">👖</div>
+        <div>
+          <h1>Fancypants</h1>
+          <div class="status-line">
+            <span id="status-dot" class="status-dot stopped"></span>
+            <span id="status-text">Idle</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <div id="battery-pill" class="pill battery-pill" title="Sensor LiPo Battery">
+          <span class="pill-label">BAT</span>
+          <span id="battery-value">--%</span>
+        </div>
+        <button id="btn-session" class="btn btn-primary">Start</button>
+      </div>
+    </header>
+
+    <!-- Error / Status Toast -->
+    <div id="toast" class="toast hidden"></div>
+
+    <!-- Live Rangefinder Visualizer Card -->
+    <section class="card visualizer-card">
+      <div class="card-header">
+        <h2>Live Sensor &amp; Output</h2>
+        <span id="live-mode-badge" class="badge">proximity</span>
+      </div>
+
+      <div class="metrics-row">
+        <div class="metric-box">
+          <span class="metric-label">Distance</span>
+          <div class="metric-value"><span id="metric-distance">---</span> <small>mm</small></div>
+        </div>
+        <div class="metric-box">
+          <span class="metric-label">Output Intensity</span>
+          <div class="metric-value"><span id="metric-intensity">0</span><small>%</small></div>
+        </div>
+      </div>
+
+      <!-- Range Bar with Active Zone & Deadzone Markers -->
+      <div class="gauge-group">
+        <div class="gauge-labels">
+          <span>0mm</span>
+          <span id="label-active-window">Active: 30–300mm</span>
+          <span id="label-deadzone">Off &gt; 500mm</span>
+        </div>
+        <div class="range-track" id="range-track">
+          <div id="range-active-zone" class="range-active-zone"></div>
+          <div id="range-deadzone-line" class="range-deadzone-line"></div>
+          <div id="range-cursor" class="range-cursor hidden"></div>
+        </div>
+      </div>
+
+      <!-- Mapped Intensity Bar -->
+      <div class="gauge-group">
+        <div class="gauge-labels">
+          <span>Mapped Drive</span>
+          <span id="label-smoothing">Smoothing: 0.30</span>
+        </div>
+        <div class="intensity-track">
+          <div id="intensity-fill" class="intensity-fill" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Connected Live Toys Telemetry -->
+      <div id="live-toys-list" class="live-toys-list"></div>
+    </section>
+
+    <!-- Engine & BLE Connection Card -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Connection &amp; Engine</h2>
+      </div>
+
+      <div class="segmented-control" role="tablist" aria-label="Engine Mode">
+        <button type="button" id="mode-standalone" class="segment" data-engine="standalone">
+          Standalone BLE
+          <small>Direct to toys</small>
+        </button>
+        <button type="button" id="mode-intiface" class="segment active" data-engine="intiface">
+          Intiface Central
+          <small>WebSocket</small>
+        </button>
+      </div>
+
+      <div id="intiface-address-row" class="form-row">
+        <label for="input-server-address">Intiface WebSocket URL</label>
+        <input id="input-server-address" type="text" placeholder="ws://127.0.0.1:12345" />
+      </div>
+
+      <details class="advanced-details">
+        <summary>Sensor BLE Settings</summary>
+        <div class="grid-2">
+          <div class="form-row">
+            <label for="input-ble-name">Sensor BLE Name</label>
+            <input id="input-ble-name" type="text" value="Fancypants" />
+          </div>
+          <div class="form-row">
+            <label for="input-data-timeout">Watchdog Timeout (s)</label>
+            <input id="input-data-timeout" type="number" min="0" max="120" value="5" />
+          </div>
+          <div class="form-row">
+            <label for="input-sample-ms">Sample Interval (ms)</label>
+            <input id="input-sample-ms" type="number" min="10" max="5000" placeholder="Default (50)" />
+          </div>
+          <div class="form-row">
+            <label for="input-notify-ms">Notify Interval (ms)</label>
+            <input id="input-notify-ms" type="number" min="10" max="5000" placeholder="Default (50)" />
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- Global / Default Mapping Card -->
+    <section class="card">
+      <div class="card-header">
+        <h2>Default Sensor Mapping</h2>
+        <span class="hint">Applies to toys without overrides</span>
+      </div>
+
+      <div class="segmented-control">
+        <button type="button" id="map-mode-distance" class="segment active" data-mapmode="distance">
+          Proximity (Distance)
+          <small>Closer or further = stronger</small>
+        </button>
+        <button type="button" id="map-mode-velocity" class="segment" data-mapmode="velocity">
+          Movement Speed
+          <small>Faster wave = stronger</small>
+        </button>
+      </div>
+
+      <!-- Proximity Controls -->
+      <div id="distance-controls" class="mode-panel">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-title">Closer = More Intense</div>
+            <div class="toggle-sub">Turn off so moving further away increases intensity</div>
+          </div>
+          <input id="input-invert" type="checkbox" class="switch" checked />
+        </div>
+
+        <div class="grid-2">
+          <div class="form-row">
+            <label for="input-min-range">Min Range (mm): <strong id="val-min-range">30</strong></label>
+            <input id="input-min-range" type="range" min="20" max="600" step="5" value="30" />
+          </div>
+          <div class="form-row">
+            <label for="input-max-range">Max Range (mm): <strong id="val-max-range">300</strong></label>
+            <input id="input-max-range" type="range" min="50" max="1200" step="10" value="300" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Velocity Controls -->
+      <div id="velocity-controls" class="mode-panel hidden">
+        <div class="form-row">
+          <label for="input-max-speed">Max Speed for 100% (mm/s): <strong id="val-max-speed">500</strong></label>
+          <input id="input-max-speed" type="range" min="100" max="2000" step="25" value="500" />
+        </div>
+      </div>
+
+      <!-- Shared Mapping Controls -->
+      <div class="grid-2">
+        <div class="form-row">
+          <label for="input-deadzone">Off Deadzone (mm): <strong id="val-deadzone">500</strong></label>
+          <input id="input-deadzone" type="range" min="0" max="1200" step="25" value="500" />
+        </div>
+        <div class="form-row">
+          <label for="input-smoothing">Smoothing (EMA): <strong id="val-smoothing">0.30</strong></label>
+          <input id="input-smoothing" type="range" min="0" max="0.95" step="0.05" value="0.30" />
+        </div>
+        <div class="form-row">
+          <label for="input-min-intensity">Min Intensity: <strong id="val-min-intensity">0%</strong></label>
+          <input id="input-min-intensity" type="range" min="0" max="1" step="0.05" value="0" />
+        </div>
+        <div class="form-row">
+          <label for="input-max-intensity">Max Intensity: <strong id="val-max-intensity">100%</strong></label>
+          <input id="input-max-intensity" type="range" min="0.05" max="1" step="0.05" value="1" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Multi-Toy Independent Configurations -->
+    <section class="card">
+      <div class="card-header">
+        <div>
+          <h2>Configured Toys</h2>
+          <span class="hint">Configure multiple toys independently (proximity, speed, patterns)</span>
+        </div>
+        <button id="btn-add-toy" type="button" class="btn btn-secondary btn-sm">+ Add Toy</button>
+      </div>
+
+      <div id="toys-container" class="toys-container"></div>
+    </section>
+
+    <!-- Footer Save Bar -->
+    <footer class="footer-bar">
+      <span id="save-status" class="save-status">Changes apply live</span>
+      <button id="btn-save-config" type="button" class="btn btn-secondary">Save as Default</button>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

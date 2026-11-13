@@ -52,7 +52,12 @@ deadzone_mm = 500
 smoothing = 0.3
 
 [buttplug]
-# Intiface Engine websocket address
+# Engine connection mode:
+#   "intiface"   = connect to an external Intiface Central / Engine via WebSocket (default)
+#   "standalone" = run an embedded Buttplug server in-process (connects to BLE toys directly)
+mode = "intiface"
+
+# Intiface Engine websocket address (used when mode = "intiface")
 # Default port for Intiface Central / Intiface Engine
 server_address = "ws://127.0.0.1:12345"
 

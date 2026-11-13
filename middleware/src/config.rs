@@ -64,7 +64,12 @@ deadzone_mm = 500
 smoothing = 0.3
 
 [buttplug]
-# Intiface Engine websocket address
+# Engine connection mode:
+#   "intiface"   = connect to an external Intiface Central / Engine via WebSocket (default)
+#   "standalone" = run an embedded Buttplug server in-process (connects to BLE toys directly)
+mode = "intiface"
+
+# Intiface Engine websocket address (used when mode = "intiface")
 # Default port for Intiface Central / Intiface Engine
 server_address = "ws://127.0.0.1:12345"
 
@@ -260,9 +265,36 @@ pub struct ResolvedDeviceTarget {
     pub mapping: MappingConfig,
 }
 
+/// How Fancypants connects to Buttplug toys: via an external Intiface Engine
+/// WebSocket server, or via an embedded in-process Buttplug server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EngineMode {
+    /// Connect to an external Intiface Central / Engine over WebSocket
+    #[default]
+    Intiface,
+    /// Run an embedded Buttplug server in-process and connect to BLE toys directly
+    #[serde(alias = "embedded")]
+    Standalone,
+}
+
+impl std::fmt::Display for EngineMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EngineMode::Intiface => write!(f, "intiface"),
+            EngineMode::Standalone => write!(f, "standalone"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ButtplugConfig {
-    /// Intiface Engine websocket address
+    /// Whether to connect to Intiface Central ("intiface") or run an embedded
+    /// Buttplug server ("standalone")
+    #[serde(default)]
+    pub mode: EngineMode,
+    /// Intiface Engine websocket address (used when mode = "intiface")
+    #[serde(default = "default_server_address")]
     pub server_address: String,
     /// Device index to control when `devices` is empty (None = first available)
     pub device_index: Option<u32>,
@@ -272,6 +304,10 @@ pub struct ButtplugConfig {
     /// Optional list of per-toy configurations for controlling multiple toys independently
     #[serde(default)]
     pub devices: Vec<DeviceTargetConfig>,
+}
+
+fn default_server_address() -> String {
+    "ws://127.0.0.1:12345".to_string()
 }
 
 fn default_actuator_types() -> Vec<ActuatorConfig> {
@@ -392,7 +428,8 @@ impl Default for Config {
                 smoothing: 0.3,
             },
             buttplug: ButtplugConfig {
-                server_address: "ws://127.0.0.1:12345".to_string(),
+                mode: EngineMode::Intiface,
+                server_address: default_server_address(),
                 device_index: None,
                 actuator_types: default_actuator_types(),
                 devices: Vec::new(),
@@ -407,6 +444,18 @@ impl Config {
         let config: Config = toml::from_str(&content)?;
         config.validate()?;
         Ok(config)
+    }
+
+    pub fn save(&self, path: &Path) -> anyhow::Result<()> {
+        self.validate()?;
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        let content = toml::to_string_pretty(self)?;
+        std::fs::write(path, content)?;
+        Ok(())
     }
 
     pub fn save_default(path: &Path) -> anyhow::Result<()> {
@@ -456,6 +505,11 @@ impl Config {
         }
         self.mapping.validate()?;
 
+        if self.buttplug.mode == EngineMode::Intiface
+            && self.buttplug.server_address.trim().is_empty()
+        {
+            anyhow::bail!("buttplug.server_address must not be empty in intiface mode");
+        }
         for target in self.resolved_device_targets() {
             target.mapping.validate()?;
             if let Some(name) = &target.device_name {
@@ -806,6 +860,29 @@ server_address = "ws://127.0.0.1:12345"
 
         config.mapping.smoothing = 1.1;
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_engine_mode_standalone_and_embedded_alias() {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
+        let toml = old_style_toml().replace("[buttplug]", "[buttplug]\nmode = \"standalone\"");
+        f.write_all(toml.as_bytes()).unwrap();
+        let config = Config::load(f.path()).unwrap();
+        assert_eq!(config.buttplug.mode, EngineMode::Standalone);
+        assert_eq!(config.buttplug.mode.to_string(), "standalone");
+
+        let mut f2 = tempfile::NamedTempFile::new().unwrap();
+        let toml2 = old_style_toml().replace("[buttplug]", "[buttplug]\nmode = \"embedded\"");
+        f2.write_all(toml2.as_bytes()).unwrap();
+        let config2 = Config::load(f2.path()).unwrap();
+        assert_eq!(config2.buttplug.mode, EngineMode::Standalone);
+
+        // Empty server_address is rejected in intiface mode, allowed in standalone mode
+        let mut bad = Config::default();
+        bad.buttplug.server_address = "   ".to_string();
+        assert!(bad.validate().is_err());
+        bad.buttplug.mode = EngineMode::Standalone;
+        bad.validate().unwrap();
     }
 
     #[test]

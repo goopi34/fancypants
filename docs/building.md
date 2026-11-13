@@ -10,8 +10,11 @@ make
 # Build just firmware
 make firmware
 
-# Build just middleware
+# Build just middleware CLI
 make middleware
+
+# Build the Tauri v2 GUI desktop application
+make app
 
 # Clean all build artifacts
 make clean
@@ -27,7 +30,9 @@ build/
 ├── firmware/
 │   └── zephyr.uf2          ← flash this to the Feather
 ├── middleware/
-│   └── fancypants           ← run this on your PC
+│   └── fancypants           ← headless CLI binary
+├── app/
+│   └── fancypants-app       ← Tauri v2 GUI desktop app
 ├── cargo-cache/             ← persistent Rust dependency cache
 └── cargo-target/            ← persistent Rust build cache
 ```
@@ -65,8 +70,11 @@ runs the tests, builds both components, and publishes a GitHub Release with:
 
 - `fancypants-nrf52-<version>.uf2` — firmware, ready to drag onto the
   `FTHR840BOOT` drive
-- `fancypants-<version>-linux-x86_64.tar.gz` — middleware binary plus a
-  commented sample `config.toml` and the docs
+- `fancypants-<version>-linux-x86_64.tar.gz` — Linux CLI + Tauri v2 GUI
+  application, sample `config.toml`, and docs
+- `fancypants-<version>-windows-x86_64.zip` — Windows CLI + Tauri v2 GUI
+  application, sample `config.toml`, and docs
+- `fancypants-<version>-android-arm64.apk` — sideloadable Android APK
 
 ```bash
 git tag v0.2.0
