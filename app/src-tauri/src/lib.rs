@@ -9,8 +9,8 @@ use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_io_github_goopi34_fancypants_MainActivity_initBtleplug(
-    env: jni::JNIEnv,
-    _class: jni::objects::JClass,
+    env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
 ) {
     let _ = btleplug::platform::init(&env);
 }

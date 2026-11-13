@@ -72,3 +72,16 @@ jobs:
       - name: Build firmware UF2
         run: make firmware
 
+  app:
+    name: Build GUI App
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build Tauri GUI application
+        run: make app
+
+
