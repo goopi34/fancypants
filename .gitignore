@@ -1,5 +1,7 @@
 # Build outputs
 build/
+result
+result-*
 
 # Firmware (Zephyr/NCS)
 firmware/build/

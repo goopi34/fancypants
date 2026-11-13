@@ -16,6 +16,10 @@ make middleware
 # Build the Tauri v2 GUI desktop application
 make app
 
+# Build (if needed) and launch the GUI application or CLI
+make run-app
+make run-cli
+
 # Clean all build artifacts
 make clean
 
@@ -91,7 +95,20 @@ The tag (minus the `v`) becomes the version embedded in both binaries.
 
 ## Manual builds (without containers)
 
-If you'd rather install toolchains locally:
+**Nix / NixOS (`flake.nix`):**
+
+```bash
+# Launch the Tauri v2 GUI application directly
+nix run
+
+# Or launch the headless CLI
+nix run .#cli
+
+# Or enter a development shell with Rust, Tauri, WebKitGTK, clang-format, and zizmor
+nix develop
+```
+
+**Other Linux distros (local toolchains):**
 
 **Firmware** — requires nRF Connect SDK (`west`):
 
