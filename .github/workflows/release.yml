@@ -135,8 +135,27 @@ jobs:
       - name: Build middleware CLI
         run: make middleware VERSION="$VERSION"
 
-      - name: Build Linux GUI App
-        run: make app VERSION="$VERSION"
+      - name: Build Linux GUI App (binary, .deb, and .AppImage)
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf desktop-file-utils libgdk-pixbuf2.0-dev
+          cargo install tauri-cli --version "^2.0.0" --locked
+          cd app/src-tauri
+          # Update version in tauri.conf.json to match release tag
+          python3 -c '
+          import json, os, pathlib
+          p = pathlib.Path("tauri.conf.json")
+          cfg = json.loads(p.read_text())
+          cfg["version"] = os.environ["VERSION"]
+          p.write_text(json.dumps(cfg, indent=2) + "\n")
+          '
+          NO_STRIP=true FANCYPANTS_VERSION="$VERSION" cargo tauri build --bundles deb,appimage
+          mkdir -p ../../build/app ../../dist
+          cp target/release/fancypants-app ../../build/app/fancypants-app
+          DEB=$(find target/release/bundle/deb -name "*.deb" | head -1)
+          APPIMAGE=$(find target/release/bundle/appimage -name "*.AppImage" | head -1)
+          cp "$DEB" "../../dist/fancypants-${VERSION}-linux-amd64.deb"
+          cp "$APPIMAGE" "../../dist/fancypants-${VERSION}-linux-x86_64.AppImage"
 
       - name: Download Windows artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -168,5 +187,5 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*.uf2 dist/*.tar.gz dist/*.zip dist/*.apk
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes dist/*.uf2 dist/*.tar.gz dist/*.deb dist/*.AppImage dist/*.zip dist/*.apk
 
