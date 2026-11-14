@@ -73,7 +73,7 @@ jobs:
         run: make firmware
 
   app:
-    name: Build GUI App
+    name: Build Linux GUI Bundles (.deb, .rpm, .AppImage)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -81,7 +81,57 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Build Tauri GUI application
-        run: make app
+      - name: Build Tauri Linux GUI bundles
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libdbus-1-dev pkg-config libudev-dev libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf desktop-file-utils
+          cargo install tauri-cli --version "^2.0.0" --locked
+          cd app/src-tauri
+          NO_STRIP=true cargo tauri build --bundles deb,rpm,appimage
+          test -n "$(find target/release/bundle/deb -name '*.deb' | head -1)"
+          test -n "$(find target/release/bundle/rpm -name '*.rpm' | head -1)"
+          test -n "$(find target/release/bundle/appimage -name '*.AppImage' | head -1)"
+
+  windows:
+    name: Build Windows App & CLI
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build Windows CLI and GUI App
+        shell: bash
+        run: |
+          cargo build --release --manifest-path middleware/Cargo.toml
+          cargo build --release --manifest-path app/src-tauri/Cargo.toml
+          test -f middleware/target/release/fancypants.exe
+          test -f app/src-tauri/target/release/fancypants-app.exe
+
+  android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Android NDK and Tauri CLI
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.2.12479018" "platforms;android-34" "build-tools;34.0.0"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          rustup target add aarch64-linux-android
+          cargo install tauri-cli --version "^2.0.0" --locked
+      - name: Initialize and build Android APK
+        working-directory: app/src-tauri
+        run: |
+          cargo tauri android init --ci
+          ./mobile/setup-android.sh
+          cargo tauri android build --apk --target aarch64
+          APK=$(find gen/android/app/build/outputs/apk -name "*.apk" | head -1)
+          test -n "$APK"
+
 
 
