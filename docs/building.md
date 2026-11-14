@@ -4,7 +4,7 @@ Everything builds in containers — no local toolchains needed. Just `docker`
 (or `podman`) and `make`.
 
 ```bash
-# Build everything
+# Build firmware + CLI middleware (default target)
 make
 
 # Build just firmware
@@ -17,8 +17,12 @@ make middleware
 make app
 
 # Build (if needed) and launch the GUI application or CLI
+# (automatically uses `nix run` on NixOS, or containerized build elsewhere)
 make run-app
 make run-cli
+
+# Print UF2 flashing instructions
+make flash
 
 # Clean all build artifacts
 make clean
@@ -37,17 +41,22 @@ build/
 │   └── fancypants           ← headless CLI binary
 ├── app/
 │   └── fancypants-app       ← Tauri v2 GUI desktop app
+├── coverage/
+│   └── html/index.html      ← HTML coverage report (from `make coverage`)
 ├── cargo-cache/             ← persistent Rust dependency cache
 └── cargo-target/            ← persistent Rust build cache
 ```
 
 ## Build options
 
-You can override the NCS version, board target, or container runtime:
+You can override the NCS version (default `v2.9-branch`), board target
+(default `adafruit_feather_nrf52840`), embedded version string (default from
+`git describe`), or container runtime (auto-detects `podman` or `docker`):
 
 ```bash
-make firmware NCS_TAG=v2.7-branch
+make firmware NCS_TAG=v2.9-branch
 make firmware BOARD=adafruit_feather_nrf52840/nrf52840/uf2
+make all VERSION=1.2.3
 make CONTAINER=podman
 ```
 
@@ -58,13 +67,20 @@ make shell-fw    # firmware (NCS/Zephyr environment)
 make shell-mw    # middleware (Rust environment)
 ```
 
-## Tests and lint
+## Tests, lint, and formatting
 
 ```bash
-make test        # middleware test suite
-make lint        # rustfmt + clippy, clang-format
-make coverage    # middleware coverage report (build/coverage/html/)
+make test               # middleware unit test suite
+make lint               # lint-middleware + lint-app (rustfmt + clippy) + lint-firmware (clang-format)
+make coverage           # middleware llvm-cov HTML report (enforces >= 80% line coverage)
+make format-middleware  # auto-format middleware and app/src-tauri Rust sources with cargo fmt
+make format-firmware    # auto-format firmware C/H sources with clang-format
 ```
+
+Pull requests run `.github/workflows/ci.yml`, which audits GitHub Actions
+workflows with `zizmor`, runs `make lint` and `make coverage`, and verifies
+builds across all target platforms (firmware `.uf2`, Linux `.deb`/`.rpm`/`.AppImage`,
+Windows `.exe` CLI + GUI, and Android `arm64` `.apk`).
 
 ## Cutting a release
 
@@ -95,31 +111,75 @@ The tag (minus the `v`) becomes the version embedded in both binaries.
 
 ## Manual builds (without containers)
 
-**Nix / NixOS (`flake.nix`):**
+### Nix / NixOS (`flake.nix`, `x86_64-linux` & `aarch64-linux`)
 
 ```bash
-# Launch the Tauri v2 GUI application directly
+# Launch the Tauri v2 GUI application directly (default flake app)
 nix run
+# or: nix run .#app
 
-# Or launch the headless CLI
+# Launch the headless CLI
 nix run .#cli
 
-# Or enter a development shell with Rust, Tauri, WebKitGTK, clang-format, and zizmor
+# Build packages into ./result
+nix build .#app
+nix build .#cli
+
+# Enter a development shell with Rust, cargo-tauri, WebKitGTK, clang-tools, openscad, and zizmor
 nix develop
 ```
 
-**Other Linux distros (local toolchains):**
-
-**Firmware** — requires nRF Connect SDK (`west`):
+### Firmware (nRF Connect SDK / `west`)
 
 ```bash
 cd firmware
 west build -b adafruit_feather_nrf52840
 ```
 
-**Middleware** — requires Rust toolchain + BlueZ dev libs:
+### Middleware CLI & Desktop GUI App (Linux / Windows)
+
+On Debian/Ubuntu, install the required system libraries first:
 
 ```bash
-cd middleware
-cargo build --release
+# CLI dependencies
+sudo apt-get install libdbus-1-dev pkg-config libudev-dev
+
+# Additional GUI dependencies (Tauri v2 / WebKitGTK)
+sudo apt-get install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf desktop-file-utils
 ```
+
+Then build with Cargo (works on both Linux and Windows):
+
+```bash
+# Headless CLI
+cargo build --release --manifest-path middleware/Cargo.toml
+
+# Tauri v2 GUI application binary
+cargo build --release --manifest-path app/src-tauri/Cargo.toml
+
+# Or package Linux .deb, .rpm, and .AppImage bundles via tauri-cli
+cargo install tauri-cli --version "^2.0.0" --locked
+cd app/src-tauri
+NO_STRIP=true cargo tauri build --bundles deb,rpm,appimage
+```
+
+### Android APK (`aarch64-linux-android`)
+
+Requires Android SDK (Platform 34, Build-Tools 34.0.0) and NDK r27
+(`NDK_HOME` set):
+
+```bash
+rustup target add aarch64-linux-android
+cargo install tauri-cli --version "^2.0.0" --locked
+
+cd app/src-tauri
+cargo tauri android init --ci
+./mobile/setup-android.sh
+cargo tauri android build --apk --target aarch64
+```
+
+`./mobile/setup-android.sh` patches the generated Android project (`gen/android`)
+with BLE and foreground-service permissions, copies `MainActivity.kt`,
+`FancypantsBleService.kt`, and vendored `droidplug` / `jni-utils` Java sources
+so both the sensor client and embedded Buttplug BLE server can access Android's
+`BluetoothAdapter` from Rust threads, and adds ProGuard keep rules.
