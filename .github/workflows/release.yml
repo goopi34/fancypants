@@ -40,49 +40,11 @@ jobs:
         working-directory: app/src-tauri
         run: |
           cargo tauri android init --ci
-          # Inject BLE + ForegroundService permissions and service registration into AndroidManifest.xml
-          python3 -c '
-          import pathlib
-          manifest = pathlib.Path("gen/android/app/src/main/AndroidManifest.xml")
-          txt = manifest.read_text()
-          perms = """
-              <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
-              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
-              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
-              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-              <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
-          """
-          service = """
-                  <service
-                      android:name=".FancypantsBleService"
-                      android:enabled="true"
-                      android:exported="false"
-                      android:foregroundServiceType="connectedDevice" />
-              </application>"""
-          txt = txt.replace("<application", perms + "\n    <application", 1)
-          txt = txt.replace("</application>", service, 1)
-          manifest.write_text(txt)
-          '
-          # Copy custom MainActivity, FancypantsBleService, and droidplug/jni-utils Java sources
-          cp mobile/android/MainActivity.kt gen/android/app/src/main/java/io/github/goopi34/fancypants/MainActivity.kt
-          cp mobile/android/FancypantsBleService.kt gen/android/app/src/main/java/io/github/goopi34/fancypants/FancypantsBleService.kt
-          BTLEPLUG_JAVA=$(find "$HOME/.cargo/registry/src" -path "*/btleplug-0.11*/src/droidplug/java/src/main/java/com" | head -1)
-          JNI_UTILS_JAVA=$(find "$HOME/.cargo/registry/src" -path "*/jni-utils-0.1*/java/src/main/java/io" | head -1)
-          cp -r "$BTLEPLUG_JAVA" gen/android/app/src/main/java/
-          cp -r "$JNI_UTILS_JAVA" gen/android/app/src/main/java/
-          # Prevent R8/ProGuard from stripping JNI classes looked up dynamically from Rust
-          cat >> gen/android/app/proguard-rules.pro << 'EOF'
-          -keep class com.nonpolynomial.btleplug.android.impl.** { *; }
-          -keep class io.github.gedgygedgy.rust.** { *; }
-          -keep class io.github.goopi34.fancypants.** { *; }
-          EOF
+          ./mobile/setup-android.sh
           FANCYPANTS_VERSION="$VERSION" cargo tauri android build --apk --target aarch64
           mkdir -p ../../dist
           APK=$(find gen/android/app/build/outputs/apk -name "*.apk" | head -1)
+          test -n "$APK"
           # Align and sign the release APK so Android 11+ (targetSdk 34) can install it directly
           keytool -genkeypair -v -keystore /tmp/sideload.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Fancypants,O=Android,C=US"
           "$ANDROID_HOME/build-tools/34.0.0/zipalign" -p -f -v 4 "$APK" /tmp/aligned.apk
