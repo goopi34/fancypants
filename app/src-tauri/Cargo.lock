@@ -1231,6 +1231,7 @@ dependencies = [
  "btleplug",
  "fancypants",
  "jni 0.19.0",
+ "jni-utils",
  "serde",
  "serde_json",
  "tauri",
