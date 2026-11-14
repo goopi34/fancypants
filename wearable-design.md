@@ -98,5 +98,27 @@ provides.
 
 ## Enclosures
 
-3D-printable enclosures (OpenSCAD source + exported STLs) that clip directly
-onto the belt live in [enclosures/](enclosures/).
+3D-printable enclosures (OpenSCAD source + exported STLs) that thread directly
+onto a belt live in [enclosures/](enclosures/):
+
+![Enclosures preview](enclosures/enclosures.png)
+
+- **Front sensor enclosure** (`front_enclosure_bottom.stl`, `front_enclosure_top.stl`):
+  houses the VL53L0X breakout (`25 × 17 mm` PCB) with a centered optical window
+  cutout in the lid, a side JST/STEMMA cable exit, and belt slots on the short
+  edges (sized for belts up to `43 × 7 mm`).
+- **Hip controller enclosure** (`hip_enclosure_bottom.stl`, `hip_enclosure_top.stl`):
+  houses the Feather nRF52840 (`22.5 × 52 mm`) and the 500mAh LiPo battery
+  (`30.5 × 37 × 5.5 mm`) end-to-end, with cutouts for the USB port, JST battery
+  connector, I2C cable entry, a reset button drill guide dimple, and belt slots
+  on the long ends.
+- **Hardware & printability:** Both enclosures use `4 mm` walls optimized for
+  resin (DLP) or FDM printing, rounded skin-facing belt tab edges, and ribbed
+  corner/PCB screw bosses designed for `3 mm` screws with counterbored lids.
+
+To re-export all four STL files after editing `enclosures/enclosures.scad`
+(requires `openscad`, included in `nix develop`):
+
+```bash
+./enclosures/export.sh enclosures/enclosures.scad enclosures
+```
